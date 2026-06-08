@@ -166,6 +166,12 @@
           return;
         }
 
+        // Fix video controls duration for DVR streams with absolute timeline
+        // Update continuously as DVR window may grow with live streams
+        if (video.duration > 86400 || Math.abs(video.duration - dvrSeconds) > 1) {
+          video.duration = dvrSeconds;
+        }
+
         dvrBadge.textContent = `DVR: ${formatDuration(dvrSeconds)}`;
         dvrBadge.className = "badge text-bg-info";
       }
@@ -222,6 +228,17 @@
         }
 
         shakaPlayer = new globalThis.shaka.Player();
+        
+        // Configure Shaka for live/DVR streams
+        shakaPlayer.configure({
+          streaming: {
+            bufferingGoal: 10,
+            rebufferingGoal: 2,
+            ignoreTextStreamFailures: true,
+            alwaysStreamText: false
+          }
+        });
+
         shakaPlayer.addEventListener("error", (event) => {
           const detail = event?.detail || {};
           setStatus(`Shaka error: ${detail.code || "unknown"}`, "text-danger");
