@@ -256,13 +256,11 @@
 
         shakaPlayer = new globalThis.shaka.Player();
         
-        // Configure Shaka for live/DVR streams
+        // Configure Shaka for live/DVR streams with v5.1.8 compatible options
         shakaPlayer.configure({
           streaming: {
             bufferingGoal: 10,
-            rebufferingGoal: 2,
-            ignoreTextStreamFailures: true,
-            alwaysStreamText: false
+            rebufferingGoal: 2
           }
         });
 
