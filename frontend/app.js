@@ -10,6 +10,7 @@ createApp({
       testingUrl: false,
       activePanel: "config",
       statusRunning: false,
+      configReady: true,
       statusOutput: "",
       dockerLogs: "",
       loadingOutput: false,
@@ -25,6 +26,7 @@ createApp({
       selectedLoadTarget: "current",
       loadConfigModal: null,
       pollTimer: null,
+      outputPollTimer: null,
     };
   },
   computed: {
@@ -172,7 +174,9 @@ createApp({
       this.config.services.push(this.newService());
     },
     removeService(index) {
-      this.config.services.splice(index, 1);
+      if (globalThis.confirm(`Delete service "${this.config.services[index].name}"?`)) {
+        this.config.services.splice(index, 1);
+      }
     },
     addServiceOverride(service) {
       const defaultKeys = this.defaultSettingKeys;
@@ -238,6 +242,15 @@ createApp({
         this.statusOutput = String(error.message || error);
       }
     },
+    async checkConfigReady() {
+      try {
+        const data = await this.api("/api/config-ready");
+        this.configReady = data.ready;
+      } catch (error) {
+        console.warn("Could not check config readiness:", error);
+        this.configReady = false;
+      }
+    },
     async loadDockerLogs() {
       try {
         const data = await this.api("/api/docker-logs");
@@ -261,6 +274,9 @@ createApp({
         const data = await this.api(`/api/control/${action}`, { method: "POST" });
         this.statusRunning = data.running;
         this.statusOutput = `${data.result.stdout || ""}${data.result.stderr || ""}`.trim();
+        if (action === "init") {
+          this.configReady = true;
+        }
       } catch (error) {
         this.statusOutput = String(error.message || error);
       } finally {
@@ -450,6 +466,7 @@ createApp({
     },
   },
   async mounted() {
+    await this.checkConfigReady();
     await this.loadStatus();
     await this.loadDockerLogs();
     await this.loadConfig();
@@ -460,6 +477,11 @@ createApp({
         this.loadStatus();
       }
     }, 5000);
+    this.outputPollTimer = globalThis.setInterval(() => {
+      if (!document.hidden && !this.loadingOutput) {
+        this.refreshOutputPanel();
+      }
+    }, 10000);
   },
   unmounted() {
     if (this.loadConfigModal) {
@@ -467,6 +489,9 @@ createApp({
     }
     if (this.pollTimer) {
       globalThis.clearInterval(this.pollTimer);
+    }
+    if (this.outputPollTimer) {
+      globalThis.clearInterval(this.outputPollTimer);
     }
   },
   template: `
@@ -476,13 +501,29 @@ createApp({
           <span class="nav-brand">
             <i class="bi bi-broadcast-pin me-2"></i>Stitcher Controller
           </span>
-          <div class="nav-actions">
-            <span class="status-badge" :class="statusBadgeClass">
-              <span class="status-dot"></span>
-              {{ statusRunning ? 'RUNNING' : 'STOPPED' }}
+          <div class="nav-status">
+            <span class="status-badge" :class="loading ? 'badge-processing' : statusBadgeClass">
+              <span v-if="!loading" class="status-dot"></span>
+              <span v-if="loading" class="processing-content">
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>PROCESSING</span>
+              </span>
+              <span v-else>
+                {{ statusRunning ? 'RUNNING' : 'STOPPED' }}
+              </span>
             </span>
+          </div>
+          <div class="nav-actions">
             <button
-              v-if="!statusRunning"
+              v-if="!configReady"
+              class="btn btn-primary btn-sm"
+              :disabled="loading"
+              @click="runAction('init')"
+            >
+              <i class="bi bi-gear-fill me-1"></i>Init
+            </button>
+            <button
+              v-else-if="!statusRunning"
               class="btn btn-success btn-sm"
               :disabled="loading"
               @click="runAction('start')"
@@ -498,7 +539,7 @@ createApp({
               <i class="bi bi-stop-fill me-1"></i>Stop
             </button>
             <button
-              class="btn btn-warning btn-sm"
+              class="btn btn-primary btn-sm"
               :disabled="loading || !statusRunning"
               @click="runAction('reload')"
             >
@@ -647,7 +688,7 @@ createApp({
                           </button>
                         </div>
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                          <span class="small text-muted">Overrides</span>
+                          <span class="small text-muted">Default Settings Overrides</span>
                           <button
                             class="btn btn-outline-primary btn-sm"
                             :disabled="defaultSettingKeys.length === 0"
@@ -739,12 +780,6 @@ createApp({
           <div v-else class="panel-area">
             <div class="card panel-card">
               <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h6 class="card-title mb-0">Output</h6>
-                  <button class="btn btn-outline-secondary btn-sm" :disabled="loadingOutput" @click="refreshOutputPanel">
-                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                  </button>
-                </div>
                 <div class="mb-3">
                   <div class="small text-muted mb-1">Docker Output</div>
                   <div v-if="statusOutput" class="output-bar">

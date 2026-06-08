@@ -232,6 +232,13 @@ def get_status() -> dict[str, Any]:
     }
 
 
+@app.get("/api/config-ready")
+def is_config_ready() -> dict[str, Any]:
+    return {
+        "ready": CONF_PATH.exists(),
+    }
+
+
 @app.post("/api/control/{action}")
 def control_stitcher(action: str) -> dict[str, Any]:
     allowed = {"start", "stop", "reload", "restart", "init"}
@@ -240,6 +247,15 @@ def control_stitcher(action: str) -> dict[str, Any]:
             status_code=400,
             detail=f"Unsupported action: {action}",
         )
+
+    if action == "init":
+        result = run_stitcher_command("init")
+        if not result["ok"]:
+            raise HTTPException(status_code=500, detail=result)
+        result = run_stitcher_command("start")
+        if not result["ok"]:
+            raise HTTPException(status_code=500, detail=result)
+        return {"result": result, "running": stitcher_running()}
 
     if action == "reload" and not stitcher_running():
         raise HTTPException(

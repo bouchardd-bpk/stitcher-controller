@@ -43,6 +43,7 @@ body {
 }
 
 .navbar-inner {
+  position: relative;
   height: 100%;
   display: flex;
   align-items: center;
@@ -62,6 +63,17 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.nav-status {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
 .status-badge {
@@ -87,6 +99,12 @@ body {
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
 
+.badge-processing {
+  background: rgba(229, 231, 235, 0.22);
+  color: #d1d5db;
+  border: 1px solid rgba(209, 213, 219, 0.8);
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -101,6 +119,10 @@ body {
 
 .badge-stopped .status-dot {
   background: #f87171;
+}
+
+.badge-processing .status-dot {
+  background: #d1d5db;
 }
 
 .app-body {
@@ -307,4 +329,28 @@ body {
     font-size: 0.72rem;
     padding: 0.2rem 0.45rem;
   }
+}
+
+/* Loading spinner styles */
+.spinner-border-sm {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-width: 0.2em;
+  color: #d1d5db;
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+}
+
+.status-badge .spinner-border {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.processing-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  line-height: 1;
 }
