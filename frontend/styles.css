@@ -163,6 +163,10 @@ body {
   padding: 10px 14px;
 }
 
+.output-bar-large {
+  min-height: 180px;
+}
+
 .output-bar-label {
   color: #4ade80;
   font-size: 0.72rem;
@@ -179,6 +183,10 @@ body {
   overflow: auto;
   font-family: "JetBrains Mono", monospace;
   font-size: 0.78rem;
+}
+
+.output-bar-pre-large {
+  max-height: 420px;
 }
 
 .panel-area {

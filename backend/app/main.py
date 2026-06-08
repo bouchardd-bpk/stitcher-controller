@@ -324,6 +324,31 @@ def test_url(payload: UrlTestModel) -> dict[str, Any]:
         ) from exc
 
 
+@app.get("/api/docker-logs")
+def get_docker_logs(tail: int = 300) -> dict[str, Any]:
+    safe_tail = max(1, min(tail, 2000))
+    proc = subprocess.run(
+        ["docker", "logs", "--tail", str(safe_tail), "stitcher"],
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = f"{proc.stdout}{proc.stderr}".strip()
+    if proc.returncode != 0 and not output:
+        output = (
+            "Unable to read Docker logs "
+            "(container may be stopped or missing)."
+        )
+
+    return {
+        "ok": proc.returncode == 0,
+        "tail": safe_tail,
+        "logs": output,
+    }
+
+
 if FRONTEND_DIR.exists():
     app.mount(
         "/",

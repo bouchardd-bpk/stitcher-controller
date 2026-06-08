@@ -11,6 +11,8 @@ createApp({
       activePanel: "config",
       statusRunning: false,
       statusOutput: "",
+      dockerLogs: "",
+      loadingOutput: false,
       saveMessage: "",
       testUrlValue: "http://localhost:1080/bpk-tv/jumping/dvr30sdefault/index.mpd",
       testResult: null,
@@ -236,6 +238,22 @@ createApp({
         this.statusOutput = String(error.message || error);
       }
     },
+    async loadDockerLogs() {
+      try {
+        const data = await this.api("/api/docker-logs");
+        this.dockerLogs = String(data.logs || "").trim();
+      } catch (error) {
+        this.dockerLogs = String(error.message || error);
+      }
+    },
+    async refreshOutputPanel() {
+      this.loadingOutput = true;
+      try {
+        await Promise.all([this.loadStatus(), this.loadDockerLogs()]);
+      } finally {
+        this.loadingOutput = false;
+      }
+    },
     async runAction(action) {
       this.loading = true;
       this.saveMessage = "";
@@ -433,6 +451,7 @@ createApp({
   },
   async mounted() {
     await this.loadStatus();
+    await this.loadDockerLogs();
     await this.loadConfig();
     await this.loadBackups();
     this.loadConfigModal = new globalThis.bootstrap.Modal(this.$refs.loadConfigModal);
@@ -511,7 +530,7 @@ createApp({
             class="sidebar-btn"
             :class="{ active: activePanel === 'output' }"
             @click="activePanel = 'output'"
-            title="Last Output"
+            title="Output"
           >
             <i class="bi bi-terminal-fill"></i>
           </button>
@@ -721,15 +740,25 @@ createApp({
             <div class="card panel-card">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h6 class="card-title mb-0">Last Output</h6>
-                  <button class="btn btn-outline-secondary btn-sm" :disabled="loading" @click="loadStatus">
+                  <h6 class="card-title mb-0">Output</h6>
+                  <button class="btn btn-outline-secondary btn-sm" :disabled="loadingOutput" @click="refreshOutputPanel">
                     <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                   </button>
                 </div>
-                <div v-if="statusOutput" class="output-bar">
-                  <pre class="output-bar-pre">{{ statusOutput }}</pre>
+                <div class="mb-3">
+                  <div class="small text-muted mb-1">Docker Output</div>
+                  <div v-if="statusOutput" class="output-bar">
+                    <pre class="output-bar-pre">{{ statusOutput }}</pre>
+                  </div>
+                  <div v-else class="text-muted small">No docker output available yet.</div>
                 </div>
-                <div v-else class="text-muted small">No output available yet.</div>
+                <div>
+                  <div class="small text-muted mb-1">Docker Logs</div>
+                  <div v-if="dockerLogs" class="output-bar output-bar-large">
+                    <pre class="output-bar-pre output-bar-pre-large">{{ dockerLogs }}</pre>
+                  </div>
+                  <div v-else class="text-muted small">No docker logs available yet.</div>
+                </div>
               </div>
             </div>
           </div>
