@@ -1,0 +1,99 @@
+Edit the configuration in the container using:
+docker exec -it stitcher sh -c 'vi /etc/broadpeak/hpc/stitcher.conf.cc'
+docker exec -t stitcher 'sudo systemctl restart stitcher-hpc'
+Adding services
+
+In the section === services upstream config ===:
+
+    setting the default setting for all services: 
+    default_config({.param_dvrwindow = "dvr_window_length",
+                    .param_sessionid = "sessionid",
+                    .init_dvrwindow = 30m,
+                    .incr_dvrwindow = 30s,
+                    .session_expiration = 15s,
+                    .manifest_expiration = 1s});
+
+    add one or more service_configwith for each service:
+    service_config("test_service", {.init_dvrwindow = 10min, .incr_dvrwindow = 15s});
+
+Configuring the upstream
+
+In the section === UPSTREAM ORIGIN ===:
+
+    edit the .endpoints in the block config.upstreams["upstream_origin"]to setup the FQDN of the upstream:
+    .endpoints = {"http://test.origin"},
+
+    customize any existing settings if required, such as: 
+    .default_expiration_function =
+     hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
+
+Configuration
+
+The default configuration ins stored in deployment/config/stitcher/stitcher.conf.cc. This is the JIT configuration file, which is compiled when the HPC service is started.
+Stitcher proxy initialization
+
+Init “upstream_stitcher” as an HPC proxy cache generator. It is used later to register virtual hosts and upstreams.
+init_stitcher(product, "upstream_stitcher");
+Stitcher specific configuration
+
+This part of the configuration gathers the information to specify how the Stitcher manages incoming and outgoing requests.
+
+     param_dvrwindow : query parameter used to fetch the full DVR length. It overrides the init_dvrwindow if present in the first request - not mandatory in incoming request.
+
+    param_sessionid : query parameter to identify a session. Is used to select shard (HPC worker thread) and manifest growing context - not mandatory in incoming request.
+
+    init_dvrwindow : on the initial incoming request, defines the full DVR length to be fetched from upstream - upstream.endoint?param_dvrwindow=init_dvrwindow
+
+    incr_dvrwindow : on subsequent requests, defines the increment DVR length to be fetched - upstream.endoint?param_dvrwindow=incr_dvrwindow
+
+    session_expiration : if no requests regarding a manifest growing context are received during this duration, the session is considered expired, this means that if a new request is received for this context, the initial request with init_dvrwindow  will be sent to upstream.
+
+    manifest_expiration : lifetime of the stitched manifest in cache - no stitching mechanisms are called if the same request is received.
+
+Those parameters can be customized per service. Service identifier is fetched from incoming request in the URL path (bpktv/{serviceid}/path_to_manifest...). 
+default_config({.param_dvrwindow = "dvr_window_length",
+                .param_sessionid = "sessionid",
+                .init_dvrwindow = 8h,
+                .incr_dvrwindow = 30s,
+                .session_expiration = 15s,
+                .manifest_expiration = 1s});
+service_config("service1", {.init_dvrwindow = 10min, .incr_dvrwindow = 15s});
+service_config("service2", {.init_dvrwindow = 1h, .incr_dvrwindow = 60s});
+
+ 
+Upstreams configuration
+
+Its main purpose is to define proxies to upstream endpoints and customize requests management behavior (cf. HPC).
+config.upstreams["upstream_origin"] = {
+    .max_redirect = 10,
+    .endpoints = {"http://origin1.example.com"},
+    .default_expiration_function =
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
+    .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_origin before_request url={}", request.get_url()); },
+    .after_reply =
+        [](cache::upstream_request& request, cache::upstream_reply& reply) {
+            stitcher::log().debug("upstream_origin after_reply url={} Cache-Control={} Expires={}", request.get_url(),
+                                  reply.get_header(HTTP_HEADER_CACHE_CONTROL), reply.get_header(HTTP_HEADER_EXPIRES));
+            reply.remove_header(HTTP_HEADER_CACHE_CONTROL);
+            reply.remove_header(HTTP_HEADER_EXPIRES);
+        },
+};
+
+auto& upstream_stitcher_conf = config.upstreams["upstream_stitcher"];
+upstream_stitcher_conf.after_reply = [](const cache::upstream_request&, cache::upstream_reply& reply) {
+    reply.remove_header(HTTP_HEADER_CACHE_CONTROL);
+    reply.remove_header(HTTP_HEADER_EXPIRES);
+};
+
+upstream_stitcher has no endpoints, it handles directly the incoming request as a cache generator but requests handling behavior can be customized here (cf. init_stitcher and register_vhost).
+Virtual Hosts
+
+Binding information (cf. HPC)
+auto& vh = config.vhosts["vhost_streaming"];
+vh.pattern = ".*";
+vh.endpoints = {endpoint(HTTP, 80), endpoint(HTTPS, 443)};
+vh.certificates = {selfsigned_certificate("default")};
+// .certificates = {{read_file("/etc/broadpeak/hpc/ssl/certif.cert"), read_file("/etc/broadpeak/hpc/ssl/certif.key")}};
+
+The register_vhost is used to register handlers on the previously defined virtual host and attach the “upstream_stitcher” and “upstream_origin” proxies.
+register_vhost(vh, "upstream_stitcher", "upstream_origin");

@@ -1,0 +1,15 @@
+{
+  "name": "stitcher-controller",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "bash ./run_controller.sh",
+    "dev:frontend": "serve frontend -l 5173",
+    "archive": "bash ./scripts/make-archive.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "serve": "^14.2.4"
+  }
+}

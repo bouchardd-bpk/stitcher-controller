@@ -1,0 +1,16 @@
+services:
+  stitcher:
+    image: harbor.broadpeaklab.tv/dev.stitcher/stitcher-rhel9:local-latest
+    container_name: stitcher
+    hostname: stitcher
+    privileged: true
+    cgroup: private
+    tmpfs:
+      - /run
+      - /tmp
+    ports:
+      - "1080:80"
+      - "1443:443"
+    volumes:
+      - ./conf/stitcher.conf.cc:/etc/broadpeak/hpc/stitcher.conf.cc
+    tty: true

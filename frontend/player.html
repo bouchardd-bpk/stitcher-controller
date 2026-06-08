@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stitcher Stream Player</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15"></script>
+    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <style>
+      body {
+        background: linear-gradient(180deg, #f6faf4 0%, #edf5ef 100%);
+      }
+
+      .player-shell {
+        max-width: 1100px;
+      }
+
+      .video-wrap {
+        background: #0f172a;
+        border-radius: 14px;
+        overflow: hidden;
+      }
+
+      video {
+        width: 100%;
+        min-height: 360px;
+        background: #0b1220;
+      }
+
+      .meta {
+        font-size: 0.9rem;
+      }
+
+      pre {
+        max-height: 240px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container py-4 player-shell">
+      <div class="card border-0 shadow-sm">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <h1 class="h4 mb-0">Stitcher Stream Player</h1>
+            <div class="d-flex gap-2 align-items-center">
+              <span id="kindBadge" class="badge text-bg-secondary">Unknown</span>
+              <span id="dvrBadge" class="badge text-bg-dark">DVR: --</span>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label for="srcInput" class="form-label">Stream URL</label>
+            <div class="input-group">
+              <input id="srcInput" class="form-control" placeholder="https://.../manifest.mpd or ...m3u8" />
+              <button id="loadBtn" class="btn btn-primary">Load Stream</button>
+            </div>
+            <div class="form-text">Supports DASH (.mpd) and HLS (.m3u8).</div>
+          </div>
+
+          <div class="video-wrap mb-3">
+            <video id="video" controls autoplay playsinline muted></video>
+          </div>
+
+          <div class="meta text-muted mb-2" id="statusLine">Ready.</div>
+          <details>
+            <summary>Debug log</summary>
+            <pre id="debugLog" class="bg-light border rounded p-2 mb-0"></pre>
+          </details>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const video = document.getElementById("video");
+      const srcInput = document.getElementById("srcInput");
+      const loadBtn = document.getElementById("loadBtn");
+      const statusLine = document.getElementById("statusLine");
+      const kindBadge = document.getElementById("kindBadge");
+      const dvrBadge = document.getElementById("dvrBadge");
+      const debugLog = document.getElementById("debugLog");
+
+      let hlsInstance = null;
+      let dashInstance = null;
+      let shouldAutoplay = true;
+      let dvrTimer = null;
+
+      function appendLog(msg) {
+        const line = `[${new Date().toISOString()}] ${msg}`;
+        debugLog.textContent = `${debugLog.textContent}${line}\n`;
+      }
+
+      function setStatus(text, kindClass = "text-muted") {
+        statusLine.className = `meta mb-2 ${kindClass}`;
+        statusLine.textContent = text;
+      }
+
+      function detectKind(url) {
+        const clean = (url || "").split("?")[0].toLowerCase();
+        if (clean.endsWith(".m3u8")) {
+          return "hls";
+        }
+        if (clean.endsWith(".mpd")) {
+          return "dash";
+        }
+        return "unknown";
+      }
+
+      function setKindBadge(kind) {
+        kindBadge.textContent = kind.toUpperCase();
+        kindBadge.className = "badge ";
+        if (kind === "hls") {
+          kindBadge.className += "text-bg-success";
+        } else if (kind === "dash") {
+          kindBadge.className += "text-bg-primary";
+        } else {
+          kindBadge.className += "text-bg-secondary";
+        }
+      }
+
+      function formatDuration(seconds) {
+        const s = Math.max(0, Number(seconds) || 0);
+        if (s < 60) {
+          return `${s.toFixed(1)}s`;
+        }
+        const m = Math.floor(s / 60);
+        const rem = Math.floor(s % 60);
+        return `${m}m ${rem}s`;
+      }
+
+      function computeSeekableDvrSeconds() {
+        const ranges = video.seekable;
+        if (!ranges || ranges.length === 0) {
+          return null;
+        }
+        const start = ranges.start(0);
+        const end = ranges.end(ranges.length - 1);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+          return null;
+        }
+        return end - start;
+      }
+
+      function updateDvrBadge() {
+        let dvrSeconds = computeSeekableDvrSeconds();
+
+        // dash.js can expose a direct metric; keep it as a fallback source.
+        if ((dvrSeconds === null || dvrSeconds <= 0) && dashInstance) {
+          try {
+            const metric = dashInstance.getDVRWindowSize();
+            if (Number.isFinite(metric) && metric > 0) {
+              dvrSeconds = metric;
+            }
+          } catch (err) {
+            appendLog(`DVR metric warning: ${String(err)}`);
+          }
+        }
+
+        if (dvrSeconds === null || dvrSeconds <= 0) {
+          dvrBadge.textContent = "DVR: --";
+          dvrBadge.className = "badge text-bg-dark";
+          return;
+        }
+
+        dvrBadge.textContent = `DVR: ${formatDuration(dvrSeconds)}`;
+        dvrBadge.className = "badge text-bg-info";
+      }
+
+      function startDvrMonitor() {
+        if (dvrTimer) {
+          clearInterval(dvrTimer);
+          dvrTimer = null;
+        }
+        updateDvrBadge();
+        dvrTimer = setInterval(updateDvrBadge, 1000);
+      }
+
+      function disposePlayers() {
+        if (hlsInstance) {
+          hlsInstance.destroy();
+          hlsInstance = null;
+        }
+        if (dashInstance) {
+          dashInstance.reset();
+          dashInstance = null;
+        }
+        if (dvrTimer) {
+          clearInterval(dvrTimer);
+          dvrTimer = null;
+        }
+        dvrBadge.textContent = "DVR: --";
+        dvrBadge.className = "badge text-bg-dark";
+      }
+
+      function loadStream() {
+        const url = srcInput.value.trim();
+        if (!url) {
+          setStatus("Please enter a stream URL.", "text-danger");
+          return;
+        }
+
+        disposePlayers();
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+
+        const kind = detectKind(url);
+        setKindBadge(kind);
+        appendLog(`Loading ${kind} stream: ${url}`);
+
+        if (kind === "hls") {
+          if (globalThis.Hls && Hls.isSupported()) {
+            hlsInstance = new Hls();
+            hlsInstance.attachMedia(video);
+            hlsInstance.on(Hls.Events.MEDIA_ATTACHED, () => {
+              hlsInstance.loadSource(url);
+            });
+            hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+              setStatus("HLS manifest loaded.", "text-success");
+              startDvrMonitor();
+              if (shouldAutoplay) {
+                video.play().catch(() => {});
+              }
+            });
+            hlsInstance.on(Hls.Events.ERROR, (_evt, data) => {
+              setStatus(`HLS error: ${data?.details || "unknown"}`, "text-danger");
+              appendLog(`HLS error: ${JSON.stringify(data)}`);
+            });
+            return;
+          }
+
+          if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = url;
+            setStatus("Native HLS playback used.", "text-success");
+            startDvrMonitor();
+            if (shouldAutoplay) {
+              video.addEventListener(
+                "loadedmetadata",
+                () => {
+                  video.play().catch(() => {});
+                },
+                { once: true },
+              );
+            }
+            return;
+          }
+
+          setStatus("HLS is not supported in this browser.", "text-danger");
+          return;
+        }
+
+        if (kind === "dash") {
+          if (globalThis.dashjs) {
+            dashInstance = dashjs.MediaPlayer().create();
+            dashInstance.setAutoPlay(shouldAutoplay);
+            dashInstance.initialize(video, url, shouldAutoplay);
+            dashInstance.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+              setStatus("DASH manifest loaded.", "text-success");
+              startDvrMonitor();
+              if (shouldAutoplay) {
+                video.play().catch(() => {});
+              }
+            });
+            dashInstance.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => {
+              setStatus("Playback started.", "text-success");
+            });
+            dashInstance.on("error", (e) => {
+              setStatus("DASH playback error.", "text-danger");
+              appendLog(`DASH error: ${JSON.stringify(e)}`);
+            });
+            return;
+          }
+
+          setStatus("dash.js is not available.", "text-danger");
+          return;
+        }
+
+        setStatus("URL must end with .mpd or .m3u8", "text-danger");
+      }
+
+      loadBtn.addEventListener("click", loadStream);
+      srcInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          loadStream();
+        }
+      });
+
+      const qs = new URLSearchParams(globalThis.location.search);
+      let src = qs.get("src");
+      const qsAutoplay = qs.get("autoplay");
+
+      if (!src) {
+        try {
+          const raw = globalThis.localStorage.getItem("stitcher_player_request");
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            src = parsed?.src || "";
+            if (typeof parsed?.autoplay === "boolean") {
+              shouldAutoplay = parsed.autoplay;
+            }
+          }
+        } catch (err) {
+          appendLog(`Storage parse warning: ${String(err)}`);
+          globalThis.console.warn("Invalid stitcher_player_request payload", err);
+        }
+      }
+
+      if (qsAutoplay !== null) {
+        shouldAutoplay = qsAutoplay !== "0";
+      }
+      if (src) {
+        srcInput.value = src;
+        loadStream();
+      } else {
+        setKindBadge("unknown");
+      }
+
+      globalThis.addEventListener("beforeunload", () => {
+        if (dvrTimer) {
+          clearInterval(dvrTimer);
+        }
+      });
+    </script>
+  </body>
+</html>
