@@ -152,13 +152,28 @@ def clean_terminal_output(text: str) -> str:
     cleaned = cleaned.replace("\x08", "")
 
     lines: list[str] = []
+    last_effective = ""
+    pending_blank = False
+
     for line in cleaned.splitlines():
         normalized = line.rstrip()
+        if not normalized:
+            pending_blank = True
+            continue
+
         if START_JOB_PROGRESS_RE.search(normalized):
             normalized = "A start job is running..."
-        if lines and normalized == lines[-1]:
+
+        if normalized == last_effective:
             continue
+
+        if pending_blank and lines:
+            # Keep paragraph spacing but avoid bursts of blank lines.
+            lines.append("")
+
         lines.append(normalized)
+        last_effective = normalized
+        pending_blank = False
 
     return "\n".join(lines).strip()
 
