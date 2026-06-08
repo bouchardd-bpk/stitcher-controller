@@ -10,8 +10,7 @@
       integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
       crossorigin="anonymous"
     />
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15"></script>
-    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.1.8/shaka-player.compiled.js"></script>
     <style>
       body {
         background: linear-gradient(180deg, #f6faf4 0%, #edf5ef 100%);
@@ -87,8 +86,7 @@
       const dvrBadge = document.getElementById("dvrBadge");
       const debugLog = document.getElementById("debugLog");
 
-      let hlsInstance = null;
-      let dashInstance = null;
+      let shakaPlayer = null;
       let shouldAutoplay = true;
       let dvrTimer = null;
 
@@ -151,12 +149,11 @@
       function updateDvrBadge() {
         let dvrSeconds = computeSeekableDvrSeconds();
 
-        // dash.js can expose a direct metric; keep it as a fallback source.
-        if ((dvrSeconds === null || dvrSeconds <= 0) && dashInstance) {
+        if ((dvrSeconds === null || dvrSeconds <= 0) && shakaPlayer) {
           try {
-            const metric = dashInstance.getDVRWindowSize();
-            if (Number.isFinite(metric) && metric > 0) {
-              dvrSeconds = metric;
+            const range = shakaPlayer.seekRange();
+            if (range && Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start) {
+              dvrSeconds = range.end - range.start;
             }
           } catch (err) {
             appendLog(`DVR metric warning: ${String(err)}`);
@@ -182,14 +179,14 @@
         dvrTimer = setInterval(updateDvrBadge, 1000);
       }
 
-      function disposePlayers() {
-        if (hlsInstance) {
-          hlsInstance.destroy();
-          hlsInstance = null;
-        }
-        if (dashInstance) {
-          dashInstance.reset();
-          dashInstance = null;
+      async function disposePlayers() {
+        if (shakaPlayer) {
+          try {
+            await shakaPlayer.destroy();
+          } catch (err) {
+            appendLog(`Player destroy warning: ${String(err)}`);
+          }
+          shakaPlayer = null;
         }
         if (dvrTimer) {
           clearInterval(dvrTimer);
@@ -199,90 +196,50 @@
         dvrBadge.className = "badge text-bg-dark";
       }
 
-      function loadStream() {
+      async function loadStream() {
         const url = srcInput.value.trim();
         if (!url) {
           setStatus("Please enter a stream URL.", "text-danger");
           return;
         }
 
-        disposePlayers();
+        if (!globalThis.shaka || !globalThis.shaka.Player) {
+          setStatus("Shaka Player is not available.", "text-danger");
+          return;
+        }
+
+        await disposePlayers();
         video.pause();
         video.removeAttribute("src");
         video.load();
 
         const kind = detectKind(url);
         setKindBadge(kind);
-        appendLog(`Loading ${kind} stream: ${url}`);
+        appendLog(`Loading ${kind} stream with Shaka: ${url}`);
 
-        if (kind === "hls") {
-          if (globalThis.Hls && Hls.isSupported()) {
-            hlsInstance = new Hls();
-            hlsInstance.attachMedia(video);
-            hlsInstance.on(Hls.Events.MEDIA_ATTACHED, () => {
-              hlsInstance.loadSource(url);
-            });
-            hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-              setStatus("HLS manifest loaded.", "text-success");
-              startDvrMonitor();
-              if (shouldAutoplay) {
-                video.play().catch(() => {});
-              }
-            });
-            hlsInstance.on(Hls.Events.ERROR, (_evt, data) => {
-              setStatus(`HLS error: ${data?.details || "unknown"}`, "text-danger");
-              appendLog(`HLS error: ${JSON.stringify(data)}`);
-            });
-            return;
-          }
-
-          if (video.canPlayType("application/vnd.apple.mpegurl")) {
-            video.src = url;
-            setStatus("Native HLS playback used.", "text-success");
-            startDvrMonitor();
-            if (shouldAutoplay) {
-              video.addEventListener(
-                "loadedmetadata",
-                () => {
-                  video.play().catch(() => {});
-                },
-                { once: true },
-              );
-            }
-            return;
-          }
-
-          setStatus("HLS is not supported in this browser.", "text-danger");
-          return;
+        if (kind === "unknown") {
+          setStatus("Unknown extension; trying with Shaka anyway.", "text-warning");
         }
 
-        if (kind === "dash") {
-          if (globalThis.dashjs) {
-            dashInstance = dashjs.MediaPlayer().create();
-            dashInstance.setAutoPlay(shouldAutoplay);
-            dashInstance.initialize(video, url, shouldAutoplay);
-            dashInstance.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
-              setStatus("DASH manifest loaded.", "text-success");
-              startDvrMonitor();
-              if (shouldAutoplay) {
-                video.play().catch(() => {});
-              }
-            });
-            dashInstance.on(dashjs.MediaPlayer.events.PLAYBACK_STARTED, () => {
-              setStatus("Playback started.", "text-success");
-            });
-            dashInstance.on("error", (e) => {
-              setStatus("DASH playback error.", "text-danger");
-              appendLog(`DASH error: ${JSON.stringify(e)}`);
-            });
-            return;
+        shakaPlayer = new globalThis.shaka.Player();
+        shakaPlayer.addEventListener("error", (event) => {
+          const detail = event?.detail || {};
+          setStatus(`Shaka error: ${detail.code || "unknown"}`, "text-danger");
+          appendLog(`Shaka error: ${JSON.stringify(detail)}`);
+        });
+
+        try {
+          await shakaPlayer.attach(video);
+          await shakaPlayer.load(url);
+          setStatus("Stream loaded with Shaka.", "text-success");
+          startDvrMonitor();
+          if (shouldAutoplay) {
+            video.play().catch(() => {});
           }
-
-          setStatus("dash.js is not available.", "text-danger");
-          return;
+        } catch (err) {
+          setStatus("Shaka playback error.", "text-danger");
+          appendLog(`Shaka load error: ${String(err)}`);
         }
-
-        setStatus("URL must end with .mpd or .m3u8", "text-danger");
       }
 
       loadBtn.addEventListener("click", loadStream);
@@ -326,7 +283,12 @@
         if (dvrTimer) {
           clearInterval(dvrTimer);
         }
+        disposePlayers();
       });
+
+      if (globalThis.shaka && globalThis.shaka.polyfill) {
+        globalThis.shaka.polyfill.installAll();
+      }
     </script>
   </body>
 </html>

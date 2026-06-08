@@ -223,6 +223,58 @@ def stitcher_running() -> bool:
     return "stitcher" in proc.stdout.splitlines()
 
 
+@app.get("/api/container-stats")
+def get_container_stats() -> dict[str, Any]:
+    proc = subprocess.run(
+        [
+            "docker",
+            "stats",
+            "stitcher",
+            "--no-stream",
+            "--format",
+            "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}",
+        ],
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = clean_terminal_output(f"{proc.stdout}{proc.stderr}")
+    if proc.returncode != 0 or not output:
+        return {
+            "ok": False,
+            "running": stitcher_running(),
+            "name": "stitcher",
+            "cpu": "--",
+            "memory": "--",
+            "memory_percent": "--",
+            "error": output or "Unable to read docker stats.",
+        }
+
+    parts = output.split("\t")
+    if len(parts) < 4:
+        return {
+            "ok": False,
+            "running": stitcher_running(),
+            "name": "stitcher",
+            "cpu": "--",
+            "memory": "--",
+            "memory_percent": "--",
+            "error": f"Unexpected docker stats output: {output}",
+        }
+
+    return {
+        "ok": True,
+        "running": stitcher_running(),
+        "name": parts[0].strip() or "stitcher",
+        "cpu": parts[1].strip() or "--",
+        "memory": parts[2].strip() or "--",
+        "memory_percent": parts[3].strip() or "--",
+        "error": "",
+    }
+
+
 @app.get("/api/status")
 def get_status() -> dict[str, Any]:
     status_result = run_stitcher_command("status")

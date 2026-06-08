@@ -211,6 +211,78 @@ body {
   max-height: 420px;
 }
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.stats-tile {
+  background: #fbfdfb;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.8rem 0.9rem;
+}
+
+.stats-label {
+  font-size: 0.72rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
+.stats-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.mini-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mini-history-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.mini-history-label {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.mini-bars {
+  height: 56px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(6px, 1fr);
+  gap: 3px;
+  align-items: end;
+  padding: 4px 6px;
+  border: 1px solid #dbe7dc;
+  border-radius: 8px;
+  background: #f8fbf8;
+}
+
+.mini-bar {
+  display: block;
+  border-radius: 4px 4px 2px 2px;
+}
+
+.mini-bar-cpu {
+  background: linear-gradient(180deg, #14b8a6, #0f766e);
+}
+
+.mini-bar-ram {
+  background: linear-gradient(180deg, #f59e0b, #b45309);
+}
+
 .panel-area {
   display: flex;
   flex-direction: column;
@@ -297,6 +369,11 @@ body {
 
   .config-file-actions {
     flex-wrap: wrap !important;
+  }
+
+  .mini-history-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 }
 

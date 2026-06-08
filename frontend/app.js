@@ -13,6 +13,8 @@ createApp({
       configReady: true,
       statusOutput: "",
       dockerLogs: "",
+      containerStats: null,
+      statsHistory: [],
       loadingOutput: false,
       saveMessage: "",
       testUrlValue: "http://localhost:1080/bpk-tv/jumping/dvr30sdefault/index.mpd",
@@ -259,10 +261,63 @@ createApp({
         this.dockerLogs = String(error.message || error);
       }
     },
+    async loadContainerStats() {
+      try {
+        this.containerStats = await this.api("/api/container-stats");
+        this.pushStatsHistory(this.containerStats);
+      } catch (error) {
+        this.containerStats = {
+          ok: false,
+          running: false,
+          name: "stitcher",
+          cpu: "--",
+          memory: "--",
+          memory_percent: "--",
+          error: String(error.message || error),
+        };
+      }
+    },
+    parsePercentValue(value) {
+      const normalized = String(value ?? "").replace(",", ".");
+      const percentPattern = /-?\d+(?:\.\d+)?/;
+      const match = percentPattern.exec(normalized);
+      if (!match) {
+        return null;
+      }
+      const parsed = Number(match[0]);
+      if (!Number.isFinite(parsed)) {
+        return null;
+      }
+      return parsed;
+    },
+    pushStatsHistory(stats) {
+      if (!stats?.ok) {
+        return;
+      }
+
+      const cpuRaw = this.parsePercentValue(stats.cpu);
+      const ramRaw = this.parsePercentValue(stats.memory_percent);
+      if (cpuRaw === null || ramRaw === null) {
+        return;
+      }
+
+      this.statsHistory.push({
+        at: new Date().toLocaleTimeString("fr-FR", { hour12: false }),
+        cpu: Math.max(0, Math.min(cpuRaw, 100)),
+        ram: Math.max(0, Math.min(ramRaw, 100)),
+        cpuRaw,
+        ramRaw,
+      });
+
+      const maxPoints = 24;
+      if (this.statsHistory.length > maxPoints) {
+        this.statsHistory.splice(0, this.statsHistory.length - maxPoints);
+      }
+    },
     async refreshOutputPanel() {
       this.loadingOutput = true;
       try {
-        await Promise.all([this.loadStatus(), this.loadDockerLogs()]);
+        await Promise.all([this.loadStatus(), this.loadDockerLogs(), this.loadContainerStats()]);
       } finally {
         this.loadingOutput = false;
       }
@@ -469,6 +524,7 @@ createApp({
     await this.checkConfigReady();
     await this.loadStatus();
     await this.loadDockerLogs();
+    await this.loadContainerStats();
     await this.loadConfig();
     await this.loadBackups();
     this.loadConfigModal = new globalThis.bootstrap.Modal(this.$refs.loadConfigModal);
@@ -780,6 +836,59 @@ createApp({
           <div v-else class="panel-area">
             <div class="card panel-card">
               <div class="card-body">
+                <div class="mb-3">
+                  <div class="small text-muted mb-1">Container Resources</div>
+                  <div class="stats-grid" v-if="containerStats">
+                    <div class="stats-tile">
+                      <div class="stats-label">Container</div>
+                      <div class="stats-value">{{ containerStats.name || 'stitcher' }}</div>
+                    </div>
+                    <div class="stats-tile">
+                      <div class="stats-label">CPU</div>
+                      <div class="stats-value">{{ containerStats.cpu || '--' }}</div>
+                    </div>
+                    <div class="stats-tile">
+                      <div class="stats-label">RAM</div>
+                      <div class="stats-value">{{ containerStats.memory || '--' }}</div>
+                    </div>
+                    <div class="stats-tile">
+                      <div class="stats-label">RAM %</div>
+                      <div class="stats-value">{{ containerStats.memory_percent || '--' }}</div>
+                    </div>
+                  </div>
+                  <div v-if="containerStats && containerStats.error" class="text-muted small mt-2">
+                    {{ containerStats.error }}
+                  </div>
+                </div>
+                <div class="mb-3" v-if="statsHistory.length">
+                  <div class="small text-muted mb-1">CPU / RAM History (last {{ statsHistory.length }} samples)</div>
+                  <div class="mini-history">
+                    <div class="mini-history-row">
+                      <div class="mini-history-label">CPU %</div>
+                      <div class="mini-bars">
+                        <span
+                          v-for="(sample, index) in statsHistory"
+                          :key="'cpu-' + index"
+                          class="mini-bar mini-bar-cpu"
+                          :style="{ height: Math.max(6, sample.cpu) + '%' }"
+                          :title="sample.at + ' - ' + sample.cpuRaw.toFixed(2) + '%'"
+                        ></span>
+                      </div>
+                    </div>
+                    <div class="mini-history-row">
+                      <div class="mini-history-label">RAM %</div>
+                      <div class="mini-bars">
+                        <span
+                          v-for="(sample, index) in statsHistory"
+                          :key="'ram-' + index"
+                          class="mini-bar mini-bar-ram"
+                          :style="{ height: Math.max(6, sample.ram) + '%' }"
+                          :title="sample.at + ' - ' + sample.ramRaw.toFixed(2) + '%'"
+                        ></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                 <div class="mb-3">
                   <div class="small text-muted mb-1">Docker Output</div>
                   <div v-if="statusOutput" class="output-bar">
