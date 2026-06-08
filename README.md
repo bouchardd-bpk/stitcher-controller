@@ -47,42 +47,73 @@ This starts:
 
 ## Deploy On A Remote VM
 
+### Recommended: Git-Based Deployment
+
+Use Git on the VM so updates are incremental (`git pull`) instead of sending full archives.
+
 ### Requirements
 
 - Ubuntu/Debian VM (or any Linux with `bash`, `python3`, `pip3`)
-- Docker Engine installed
-- Project files copied to the VM
+- Docker Engine installed and running
+- Git installed
+- Network access from VM to GitHub
 
-### Copy Files To The VM
-
-```bash
-# From your local machine
-rsync -av --exclude='.venv' --exclude='node_modules' \
-  /home/david/stitcher/ user@vm-ip:~/stitcher/
-```
-
-Or with scp:
+### First Deployment On The VM
 
 ```bash
-scp -r /home/david/stitcher user@vm-ip:~/stitcher
-```
+# 1) Clone the repository
+git clone https://github.com/bouchardd-bpk/stitcher-controller.git
+cd stitcher-controller
 
-### Install And Start On The VM
-
-```bash
-cd ~/stitcher
-
-# Install Python dependencies
+# 2) Create Python virtualenv and install backend dependencies
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 
-# Run the controller (port 8812)
+# 3) Start the controller (port 8812)
 chmod +x run_controller.sh
 ./run_controller.sh
 ```
 
 Then open: `http://VM_IP:8812`
+
+### Daily Update Workflow
+
+After pushing new commits from your workstation:
+
+```bash
+cd ~/stitcher-controller
+git pull
+source .venv/bin/activate
+./run_controller.sh
+```
+
+If running with `systemd`, restart the service instead of launching manually:
+
+```bash
+sudo systemctl restart stitcher-controller
+sudo systemctl status stitcher-controller
+```
+
+### Alternative (No GitHub Access): rsync
+
+If your VM cannot pull from GitHub, use incremental `rsync` from your local machine:
+
+```bash
+rsync -av --delete \
+  --exclude='.venv' \
+  --exclude='node_modules' \
+  --exclude='conf/backups' \
+  /path/to/stitcher-controller/ user@vm-ip:~/stitcher-controller/
+```
+
+Then on VM:
+
+```bash
+cd ~/stitcher-controller
+source .venv/bin/activate
+./run_controller.sh
+```
 
 ### Run As A Background Service (systemd)
 
@@ -96,8 +127,8 @@ Requires=docker.service
 
 [Service]
 User=YOUR_USER
-WorkingDirectory=/home/YOUR_USER/stitcher
-ExecStart=/home/YOUR_USER/stitcher/.venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port 8812 --app-dir /home/YOUR_USER/stitcher
+WorkingDirectory=/home/YOUR_USER/stitcher-controller
+ExecStart=/home/YOUR_USER/stitcher-controller/.venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port 8812 --app-dir /home/YOUR_USER/stitcher-controller
 Restart=always
 RestartSec=5
 
