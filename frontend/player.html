@@ -89,7 +89,6 @@
       let shakaPlayer = null;
       let shouldAutoplay = true;
       let dvrTimer = null;
-      let lastNormalizedStart = null;  // Track DVR normalization to avoid constant updates
 
       function appendLog(msg) {
         const line = `[${new Date().toISOString()}] ${msg}`;
@@ -149,23 +148,15 @@
 
       function updateDvrBadge() {
         let dvrSeconds = computeSeekableDvrSeconds();
-        let startOffset = null;
 
         if ((dvrSeconds === null || dvrSeconds <= 0) && shakaPlayer) {
           try {
             const range = shakaPlayer.seekRange();
             if (range && Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start) {
-              startOffset = range.start;
               dvrSeconds = range.end - range.start;
             }
           } catch (err) {
             appendLog(`DVR metric warning: ${String(err)}`);
-          }
-        } else if (dvrSeconds !== null && dvrSeconds > 0) {
-          // Get start offset from seekable range
-          const ranges = video.seekable;
-          if (ranges && ranges.length > 0) {
-            startOffset = ranges.start(0);
           }
         }
 
@@ -176,26 +167,9 @@
         }
 
         // Fix video controls duration for DVR streams with absolute timeline
-        // Update continuously as DVR window may grow with live streams
+        // Only modify duration, not currentTime to avoid breaking segment requests
         if (video.duration > 86400 || Math.abs(video.duration - dvrSeconds) > 1) {
           video.duration = dvrSeconds;
-        }
-
-        // Normalize currentTime if using absolute timestamps (Unix epoch)
-        // Handle both initial normalization and changes to DVR window start
-        if (startOffset !== null && startOffset > 1000) {
-          if (video.currentTime > startOffset) {
-            // First normalization: currentTime is still in absolute timestamps
-            video.currentTime = video.currentTime - startOffset;
-            lastNormalizedStart = startOffset;
-          } else if (lastNormalizedStart !== null && startOffset !== lastNormalizedStart) {
-            // DVR window moved: adjust currentTime by the offset delta
-            const offsetDelta = startOffset - lastNormalizedStart;
-            video.currentTime -= offsetDelta;
-            lastNormalizedStart = startOffset;
-          } else if (lastNormalizedStart === null) {
-            lastNormalizedStart = startOffset;
-          }
         }
 
         dvrBadge.textContent = `DVR: ${formatDuration(dvrSeconds)}`;
@@ -224,7 +198,6 @@
           clearInterval(dvrTimer);
           dvrTimer = null;
         }
-        lastNormalizedStart = null;  // Reset normalization on player dispose
         dvrBadge.textContent = "DVR: --";
         dvrBadge.className = "badge text-bg-dark";
       }
