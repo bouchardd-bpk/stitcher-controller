@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 import urllib.error
@@ -136,6 +137,32 @@ app.add_middleware(
 )
 
 
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])",
+)
+START_JOB_PROGRESS_RE = re.compile(
+    r"A start job is running for .*\(\d+s / no limit\)",
+)
+
+
+def clean_terminal_output(text: str) -> str:
+    # Remove ANSI sequences and normalize terminal control characters.
+    cleaned = ANSI_ESCAPE_RE.sub("", text)
+    cleaned = cleaned.replace("\r", "")
+    cleaned = cleaned.replace("\x08", "")
+
+    lines: list[str] = []
+    for line in cleaned.splitlines():
+        normalized = line.rstrip()
+        if START_JOB_PROGRESS_RE.search(normalized):
+            normalized = "A start job is running..."
+        if lines and normalized == lines[-1]:
+            continue
+        lines.append(normalized)
+
+    return "\n".join(lines).strip()
+
+
 def run_stitcher_command(command: str) -> dict[str, Any]:
     if not STITCHER_SCRIPT.exists():
         raise HTTPException(status_code=500, detail="stitcher.sh not found")
@@ -157,8 +184,8 @@ def run_stitcher_command(command: str) -> dict[str, Any]:
     return {
         "command": command,
         "returncode": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "stdout": clean_terminal_output(proc.stdout),
+        "stderr": clean_terminal_output(proc.stderr),
         "ok": proc.returncode == 0,
     }
 
@@ -336,6 +363,7 @@ def get_docker_logs(tail: int = 300) -> dict[str, Any]:
     )
 
     output = f"{proc.stdout}{proc.stderr}".strip()
+    output = clean_terminal_output(output)
     if proc.returncode != 0 and not output:
         output = (
             "Unable to read Docker logs "
