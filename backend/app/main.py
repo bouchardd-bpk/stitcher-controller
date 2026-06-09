@@ -15,6 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config_manager import (
+    UpstreamConfig,
+    VhostConfig,
+    VhostEndpoint,
     apply_config_updates,
     make_backup,
     parse_config_text,
@@ -28,6 +31,42 @@ STITCHER_SCRIPT = ROOT_DIR / "stitcher.sh"
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
 
+RESERVED_UPSTREAM_NAMES = {"upstream_stitcher"}
+
+
+class UpstreamModel(BaseModel):
+    name: str = Field(min_length=1)
+    endpoints: list[str]
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name: str) -> str:
+        clean = name.strip()
+        if not clean:
+            raise ValueError("Upstream name cannot be empty")
+        if clean in RESERVED_UPSTREAM_NAMES:
+            raise ValueError(f"Upstream name '{clean}' is reserved")
+        return clean
+
+    @field_validator("endpoints")
+    @classmethod
+    def validate_endpoints(cls, endpoints: list[str]) -> list[str]:
+        if not endpoints:
+            raise ValueError("At least one endpoint is required")
+        validated: list[str] = []
+        for endpoint in endpoints:
+            current = str(endpoint).strip()
+            if not current:
+                raise ValueError("Endpoint cannot be empty")
+            parsed = urllib.parse.urlparse(current)
+            if parsed.scheme not in {"http", "https"}:
+                raise ValueError(f"Invalid endpoint scheme: {current}")
+            if not parsed.netloc:
+                raise ValueError(f"Invalid endpoint host: {current}")
+            validated.append(current)
+        return validated
+
+
 class ServiceConfigModel(BaseModel):
     name: str = Field(min_length=1)
     settings: dict[str, str]
@@ -36,7 +75,7 @@ class ServiceConfigModel(BaseModel):
 class ConfigUpdateModel(BaseModel):
     default_settings: dict[str, str]
     services: list[ServiceConfigModel]
-    upstream_origin_endpoints: list[str]
+    upstreams: list[UpstreamModel]
 
     @field_validator("default_settings")
     @classmethod
@@ -95,30 +134,12 @@ class ConfigUpdateModel(BaseModel):
 
         return self
 
-    @field_validator("upstream_origin_endpoints")
-    @classmethod
-    def validate_upstream_origin_endpoints(
-        cls,
-        endpoints: list[str],
-    ) -> list[str]:
-        validated: list[str] = []
-        for endpoint in endpoints:
-            current = str(endpoint).strip()
-            if not current:
-                raise ValueError("Endpoint cannot be empty")
-
-            parsed = urllib.parse.urlparse(current)
-            if parsed.scheme not in {"http", "https"}:
-                raise ValueError(
-                    f"Invalid endpoint scheme: {current}",
-                )
-            if not parsed.netloc:
-                raise ValueError(
-                    f"Invalid endpoint host: {current}",
-                )
-
-            validated.append(current)
-        return validated
+    @model_validator(mode="after")
+    def validate_upstream_names_unique(self) -> "ConfigUpdateModel":
+        names = [u.name for u in self.upstreams]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate upstream names")
+        return self
 
 
 class UrlTestModel(BaseModel):
@@ -333,7 +354,25 @@ def read_config() -> dict[str, Any]:
     return {
         "default_settings": parsed.default_settings,
         "services": parsed.services,
-        "upstream_origin_endpoints": parsed.upstream_origin_endpoints,
+        "upstreams": [
+            {"name": u.name, "endpoints": u.endpoints}
+            for u in parsed.upstreams
+        ],
+        "vhosts": [
+            {
+                "name": v.name,
+                "var": v.var,
+                "pattern": v.pattern,
+                "endpoints": [
+                    {"protocol": ep.protocol, "port": ep.port}
+                    for ep in v.endpoints
+                ],
+                "cert_selfsigned": v.cert_selfsigned,
+                "cert_file": v.cert_file,
+                "upstream": v.upstream,
+            }
+            for v in parsed.vhosts
+        ],
         "raw": parsed.raw,
     }
 
@@ -354,7 +393,25 @@ def update_config(payload: ConfigUpdateModel) -> dict[str, Any]:
             text=current,
             default_settings=payload.default_settings,
             services=[s.model_dump() for s in payload.services],
-            upstream_origin_endpoints=payload.upstream_origin_endpoints,
+            upstreams=[
+                UpstreamConfig(name=u.name, endpoints=u.endpoints)
+                for u in payload.upstreams
+            ],
+            vhosts=[
+                VhostConfig(
+                    name=v.name,
+                    var=v.var,
+                    pattern=v.pattern,
+                    endpoints=[
+                        VhostEndpoint(protocol=ep.protocol, port=ep.port)
+                        for ep in v.endpoints
+                    ],
+                    cert_selfsigned=v.cert_selfsigned,
+                    cert_file=v.cert_file,
+                    upstream=v.upstream,
+                )
+                for v in payload.vhosts
+            ],
         )
         CONF_PATH.write_text(updated, encoding="utf-8")
     except Exception as exc:

@@ -17,12 +17,15 @@ createApp({
       statsHistory: [],
       loadingOutput: false,
       saveMessage: "",
+      toasts: [],
+      _toastId: 0,
       testUrlValue: "http://localhost:1080/bpk-tv/jumping/dvr30sdefault/index.mpd",
       testResult: null,
       config: {
         default_settings: [],
         services: [],
-        upstream_origin_endpoints: [],
+        upstreams: [],
+        vhosts: [],
       },
       backups: [],
       selectedLoadTarget: "current",
@@ -41,11 +44,38 @@ createApp({
       }
       return this.testResult.ok ? "text-bg-success" : "text-bg-danger";
     },
-    endpointValidation() {
-      return this.config.upstream_origin_endpoints.map((endpoint) => this.validateEndpoint(endpoint));
+    vhostValidation() {
+      const names = this.config.vhosts.map((v) => String(v.name ?? "").trim());
+      const upstreamNames = this.config.upstreams.map((u) => String(u.name ?? "").trim()).filter(Boolean);
+      return this.config.vhosts.map((vhost, index) => {
+        const name = names[index];
+        if (!name) return { ok: false, message: "Vhost name required" };
+        if (names.filter((n) => n === name).length > 1) return { ok: false, message: "Duplicate vhost name" };
+        if (!vhost.endpoints || vhost.endpoints.length === 0) return { ok: false, message: "At least one endpoint required" };
+        if (!vhost.upstream) return { ok: false, message: "Upstream required" };
+        const hasHttps = vhost.endpoints.some((ep) => ep.protocol === "HTTPS");
+        if (!hasHttps && vhost.cert_selfsigned) return { ok: false, message: "Certificate only applies with HTTPS endpoint" };
+        return { ok: true, message: "" };
+      });
     },
-    hasInvalidEndpoints() {
-      return this.endpointValidation.some((item) => !item.ok);
+    hasInvalidVhosts() {
+      return this.vhostValidation.some((item) => !item.ok);
+    },
+    upstreamValidation() {
+      const names = this.config.upstreams.map((u) => String(u.name ?? "").trim());
+      return this.config.upstreams.map((upstream, index) => {
+        const name = names[index];
+        if (!name) return { ok: false, message: "Upstream name required" };
+        if (name === "upstream_stitcher") return { ok: false, message: "upstream_stitcher is reserved" };
+        if (names.filter((n) => n === name).length > 1) return { ok: false, message: "Duplicate upstream name" };
+        if (!upstream.endpoints || upstream.endpoints.length === 0) return { ok: false, message: "At least one endpoint required" };
+        const invalidEp = upstream.endpoints.map((ep) => this.validateEndpoint(ep)).find((v) => !v.ok);
+        if (invalidEp) return { ok: false, message: "Invalid endpoint: " + invalidEp.message };
+        return { ok: true, message: "" };
+      });
+    },
+    hasInvalidUpstreams() {
+      return this.upstreamValidation.some((item) => !item.ok);
     },
     defaultSettingValidation() {
       const keys = this.config.default_settings.map((setting) => String(setting.key ?? "").trim());
@@ -108,7 +138,7 @@ createApp({
       return this.serviceValidation.some((item) => !item.ok);
     },
     canSaveConfig() {
-      return !this.saving && !this.hasInvalidEndpoints && !this.hasInvalidDefaultSettings && !this.hasInvalidServices;
+      return !this.saving && !this.hasInvalidUpstreams && !this.hasInvalidDefaultSettings && !this.hasInvalidServices && !this.hasInvalidVhosts;
     },
     availableConfigTargets() {
       const targets = [{ value: "current", label: "Current config file" }];
@@ -116,6 +146,22 @@ createApp({
         targets.push({ value: backup, label: backup });
       }
       return targets;
+    },
+  },
+  watch: {
+    config: {
+      handler(newConfig) {
+        // Automatically clear certificate when no HTTPS endpoints
+        if (newConfig.vhosts) {
+          newConfig.vhosts.forEach((vhost) => {
+            const hasHttps = vhost.endpoints && vhost.endpoints.some((ep) => ep.protocol === "HTTPS");
+            if (!hasHttps && vhost.cert_selfsigned) {
+              vhost.cert_selfsigned = false;
+            }
+          });
+        }
+      },
+      deep: true,
     },
   },
   methods: {
@@ -135,6 +181,13 @@ createApp({
         return this.ensureQuoted(trimmed);
       }
       return trimmed;
+    },
+    showToast(message, type = "info") {
+      const id = ++this._toastId;
+      this.toasts.push({ id, message, type });
+      globalThis.setTimeout(() => {
+        this.toasts = this.toasts.filter((t) => t.id !== id);
+      }, 4000);
     },
     async api(path, options = {}) {
       const response = await fetch(`${API_BASE}${path}`, {
@@ -211,11 +264,55 @@ createApp({
       }
       return result;
     },
-    addEndpoint() {
-      this.config.upstream_origin_endpoints.push("https://");
+    addVhost() {
+      const upstreamNames = this.config.upstreams.map((u) => u.name).filter(Boolean);
+      this.config.vhosts.push({
+        name: "vhost_new",
+        var: "vh_new",
+        pattern: ".*",
+        endpoints: [{ protocol: "HTTP", port: 80 }],
+        cert_selfsigned: null,
+        cert_file: null,
+        upstream: upstreamNames[0] || "",
+      });
     },
-    removeEndpoint(index) {
-      this.config.upstream_origin_endpoints.splice(index, 1);
+    removeVhost(index) {
+      if (globalThis.confirm(`Delete vhost "${this.config.vhosts[index].name}"?`)) {
+        this.config.vhosts.splice(index, 1);
+      }
+    },
+    addVhostEndpoint(vhost) {
+      vhost.endpoints.push({ protocol: "HTTP", port: 80 });
+    },
+    removeVhostEndpoint(vhost, index) {
+      vhost.endpoints.splice(index, 1);
+    },
+    vhostHasHttps(vhost) {
+      return (vhost.endpoints || []).some((ep) => ep.protocol === "HTTPS");
+    },
+    onVhostProtocolChange(vhost, ep) {
+      if (ep.protocol === "HTTPS" && ep.port === 80) ep.port = 443;
+      if (ep.protocol === "HTTP" && ep.port === 443) ep.port = 80;
+      if (!this.vhostHasHttps(vhost)) {
+        vhost.cert_selfsigned = null;
+        vhost.cert_file = null;
+      } else if (vhost.cert_selfsigned === null && vhost.cert_file === null) {
+        vhost.cert_selfsigned = "default";
+      }
+    },
+    addUpstream() {
+      this.config.upstreams.push({ name: "upstream_new", endpoints: ["https://"] });
+    },
+    removeUpstream(index) {
+      if (globalThis.confirm(`Delete upstream "${this.config.upstreams[index].name}"?`)) {
+        this.config.upstreams.splice(index, 1);
+      }
+    },
+    addUpstreamEndpoint(upstream) {
+      upstream.endpoints.push("https://");
+    },
+    removeUpstreamEndpoint(upstream, index) {
+      upstream.endpoints.splice(index, 1);
     },
     validateEndpoint(value) {
       const current = String(value ?? "").trim();
@@ -324,16 +421,19 @@ createApp({
     },
     async runAction(action) {
       this.loading = true;
-      this.saveMessage = "";
+      const labels = { start: "Starting Stitcher", stop: "Stopping Stitcher", reload: "Reloading configuration", restart: "Restarting Stitcher", init: "Initializing Stitcher" };
+      this.showToast(labels[action] || action, "info");
       try {
         const data = await this.api(`/api/control/${action}`, { method: "POST" });
         this.statusRunning = data.running;
         this.statusOutput = `${data.result.stdout || ""}${data.result.stderr || ""}`.trim();
+        this.showToast(`${action} complete`, "success");
         if (action === "init") {
           this.configReady = true;
         }
       } catch (error) {
         this.statusOutput = String(error.message || error);
+        this.showToast(`Error: ${String(error.message || error).slice(0, 80)}`, "danger");
       } finally {
         this.loading = false;
       }
@@ -352,7 +452,21 @@ createApp({
           value: String(key).startsWith("param_") ? this.stripOuterQuotes(value) : String(value ?? ""),
         })),
       }));
-      this.config.upstream_origin_endpoints = data.upstream_origin_endpoints || [];
+
+      this.config.upstreams = (data.upstreams || []).map((u) => ({
+        name: u.name,
+        endpoints: Array.isArray(u.endpoints) ? [...u.endpoints] : [],
+      }));
+
+      this.config.vhosts = (data.vhosts || []).map((v) => ({
+        name: v.name,
+        var: v.var || "",
+        pattern: v.pattern || ".*",
+        endpoints: (v.endpoints || []).map((ep) => ({ protocol: ep.protocol, port: ep.port })),
+        cert_selfsigned: v.cert_selfsigned ?? null,
+        cert_file: v.cert_file ?? null,
+        upstream: v.upstream || "",
+      }));
     },
     async loadConfig() {
       const data = await this.api("/api/config");
@@ -383,11 +497,13 @@ createApp({
         if (this.selectedLoadTarget === "current") {
           await this.loadConfig();
           this.saveMessage = "Current configuration loaded.";
+          this.showToast("Configuration loaded.", "success");
         } else {
           await this.api(`/api/backups/${this.selectedLoadTarget}/restore`, { method: "POST" });
           await this.loadConfig();
           await this.loadBackups();
           this.saveMessage = `Loaded: ${this.selectedLoadTarget}`;
+          this.showToast(`Loaded: ${this.selectedLoadTarget}`, "success");
         }
         this.closeLoadConfigModal();
       } catch (error) {
@@ -419,10 +535,9 @@ createApp({
         return;
       }
 
-      const normalizedEndpoints = this.config.upstream_origin_endpoints.map((value) => String(value ?? "").trim());
-      const firstInvalidIndex = normalizedEndpoints.findIndex((value) => !this.validateEndpoint(value).ok);
-      if (firstInvalidIndex !== -1) {
-        this.saveMessage = `Error: invalid endpoint at position ${firstInvalidIndex + 1}. Only http/https URLs are allowed.`;
+      const firstInvalidUpstream = this.upstreamValidation.findIndex((item) => !item.ok);
+      if (firstInvalidUpstream !== -1) {
+        this.saveMessage = `Error: invalid upstream at position ${firstInvalidUpstream + 1}.`;
         return;
       }
 
@@ -442,25 +557,42 @@ createApp({
         };
       });
 
+      const upstreamsPayload = this.config.upstreams.map((u) => ({
+        name: String(u.name ?? "").trim(),
+        endpoints: (u.endpoints || []).map((ep) => String(ep ?? "").trim()).filter(Boolean),
+      }));
+
+      const vhostsPayload = this.config.vhosts.map((v) => ({
+        name: String(v.name ?? "").trim(),
+        var: String(v.var ?? "").trim() || v.name.replace(/[^a-z0-9]/g, "_"),
+        pattern: String(v.pattern ?? ".*").trim(),
+        endpoints: (v.endpoints || []).map((ep) => ({ protocol: ep.protocol, port: Number(ep.port) })),
+        cert_selfsigned: v.cert_selfsigned || null,
+        cert_file: v.cert_file || null,
+        upstream: String(v.upstream ?? "").trim(),
+      }));
+
       this.saving = true;
       this.saveMessage = "";
       this.config.default_settings = normalizedDefaults;
       this.config.services = normalizedServices;
-      this.config.upstream_origin_endpoints = normalizedEndpoints;
       try {
         const payload = {
           default_settings: defaultSettingsPayload,
           services: servicesPayload,
-          upstream_origin_endpoints: this.config.upstream_origin_endpoints,
+          upstreams: upstreamsPayload,
+          vhosts: vhostsPayload,
         };
         const data = await this.api("/api/config", {
           method: "PUT",
           body: JSON.stringify(payload),
         });
         this.saveMessage = `Saved. Backup: ${data.backup}`;
+        this.showToast(`Saved. Backup: ${data.backup}`, "success");
         await this.loadBackups();
       } catch (error) {
         this.saveMessage = `Error: ${String(error.message || error)}`;
+        this.showToast(`Save error: ${String(error.message || error).slice(0, 80)}`, "danger");
       } finally {
         this.saving = false;
       }
@@ -472,10 +604,12 @@ createApp({
       try {
         await this.api(`/api/backups/${name}/restore`, { method: "POST" });
         this.saveMessage = `Restored: ${name}`;
+        this.showToast(`Restored: ${name}`, "success");
         await this.loadConfig();
         await this.loadBackups();
       } catch (error) {
         this.saveMessage = `Restore error: ${String(error.message || error)}`;
+        this.showToast(`Restore error: ${String(error.message || error).slice(0, 80)}`, "danger");
       }
     },
     async testUrl() {
@@ -596,6 +730,20 @@ createApp({
             </button>
             <button
               class="btn btn-primary btn-sm"
+              :disabled="!canSaveConfig"
+              @click="saveConfig"
+            >
+              <i class="bi bi-floppy me-1"></i>{{ saving ? 'Saving...' : 'Save' }}
+            </button>
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="saving"
+              @click="openLoadConfigModal"
+            >
+              <i class="bi bi-folder2-open me-1"></i>Load
+            </button>
+            <button
+              class="btn btn-primary btn-sm"
               :disabled="loading || !statusRunning"
               @click="runAction('reload')"
             >
@@ -680,42 +828,198 @@ createApp({
                 </div>
               </div>
 
-              <div class="col-12 col-xl-6">
-                <div class="card panel-card h-100">
-                  <div class="card-body d-flex flex-column">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                      <h6 class="card-title mb-0">Upstream Origin</h6>
-                      <button class="btn btn-primary btn-sm" @click="addEndpoint">
-                        <i class="bi bi-plus-lg me-1"></i>Add endpoint
-                      </button>
-                    </div>
-                    <div class="d-flex flex-column gap-2">
-                      <div
-                        v-for="(endpoint, index) in config.upstream_origin_endpoints"
-                        :key="index"
-                        class="endpoint-row"
-                      >
-                        <input
-                          class="form-control form-control-sm"
-                          :class="{ 'is-invalid': !endpointValidation[index].ok }"
-                          v-model="config.upstream_origin_endpoints[index]"
-                          placeholder="https://origin.example.com"
-                        />
-                        <button class="btn btn-outline-danger btn-sm" @click="removeEndpoint(index)">
-                          <i class="bi bi-trash3"></i>
-                        </button>
-                        <div v-if="!endpointValidation[index].ok" class="invalid-feedback d-block">
-                          {{ endpointValidation[index].message }}
+            </div>
+
+            <div class="card panel-card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="card-title mb-0">Upstreams</h6>
+                  <button class="btn btn-primary btn-sm" @click="addUpstream">
+                    <i class="bi bi-plus-lg me-1"></i>Add upstream
+                  </button>
+                </div>
+                <div class="row g-3">
+                  <div
+                    v-for="(upstream, uIdx) in config.upstreams"
+                    :key="uIdx"
+                    class="col-12 col-md-6 col-xl-4"
+                  >
+                    <div class="card service-grid-card h-100 border-0">
+                      <div class="card-body">
+                        <div class="service-name-row mb-2">
+                          <label class="form-label mb-0 small text-muted">Name</label>
+                          <input
+                            class="form-control form-control-sm"
+                            :class="{ 'is-invalid': !upstreamValidation[uIdx].ok }"
+                            v-model="upstream.name"
+                            placeholder="upstream_origin"
+                          />
+                          <button class="btn btn-outline-danger btn-sm" @click="removeUpstream(uIdx)">
+                            <i class="bi bi-trash3"></i>
+                          </button>
+                        </div>
+                        <div v-if="!upstreamValidation[uIdx].ok" class="text-danger small mb-2">
+                          {{ upstreamValidation[uIdx].message }}
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                          <span class="small text-muted">Endpoints</span>
+                          <button class="btn btn-outline-primary btn-sm" @click="addUpstreamEndpoint(upstream)">
+                            <i class="bi bi-plus-lg me-1"></i>Add
+                          </button>
+                        </div>
+                        <div class="d-flex flex-column gap-1">
+                          <div
+                            v-for="(ep, epIdx) in upstream.endpoints"
+                            :key="epIdx"
+                            class="endpoint-row"
+                          >
+                            <input
+                              class="form-control form-control-sm"
+                              :class="{ 'is-invalid': !validateEndpoint(ep).ok }"
+                              v-model="upstream.endpoints[epIdx]"
+                              placeholder="https://origin.example.com"
+                            />
+                            <button class="btn btn-outline-danger btn-sm" @click="removeUpstreamEndpoint(upstream, epIdx)">
+                              <i class="bi bi-trash3"></i>
+                            </button>
+                            <div v-if="!validateEndpoint(ep).ok" class="invalid-feedback d-block">
+                              {{ validateEndpoint(ep).message }}
+                            </div>
+                          </div>
+                        </div>
+                        <div v-if="!upstream.endpoints || upstream.endpoints.length === 0" class="text-muted small mt-1">
+                          No endpoint configured.
                         </div>
                       </div>
                     </div>
-                    <div v-if="config.upstream_origin_endpoints.length === 0" class="text-muted small mt-1">
-                      No upstream endpoint configured.
-                    </div>
-                    <div v-if="hasInvalidEndpoints" class="text-danger small mt-2">
-                      Only valid http/https endpoints can be saved.
+                  </div>
+                  <div v-if="config.upstreams.length === 0" class="col-12 text-muted small">No upstreams configured.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card panel-card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="card-title mb-0">Virtual Hosts</h6>
+                  <button class="btn btn-primary btn-sm" @click="addVhost">
+                    <i class="bi bi-plus-lg me-1"></i>Add vhost
+                  </button>
+                </div>
+                <div class="row g-3">
+                  <div
+                    v-for="(vhost, vIdx) in config.vhosts"
+                    :key="vIdx"
+                    class="col-12 col-md-6 col-xl-4"
+                  >
+                    <div class="card service-grid-card h-100 border-0">
+                      <div class="card-body">
+                        <div class="service-name-row mb-2">
+                          <label class="form-label mb-0 small text-muted">Name</label>
+                          <input
+                            class="form-control form-control-sm"
+                            :class="{ 'is-invalid': !vhostValidation[vIdx].ok }"
+                            v-model="vhost.name"
+                            placeholder="vhost_streaming"
+                          />
+                          <button class="btn btn-outline-danger btn-sm" @click="removeVhost(vIdx)">
+                            <i class="bi bi-trash3"></i>
+                          </button>
+                        </div>
+                        <div v-if="!vhostValidation[vIdx].ok" class="text-danger small mb-2">
+                          {{ vhostValidation[vIdx].message }}
+                        </div>
+
+                        <div class="row g-2 mb-2">
+                          <div class="col-6">
+                            <label class="form-label mb-1 small text-muted">Pattern (regex)</label>
+                            <input class="form-control form-control-sm" v-model="vhost.pattern" placeholder=".*" />
+                          </div>
+                          <div class="col-6">
+                            <label class="form-label mb-1 small text-muted">Upstream</label>
+                            <select class="form-select form-select-sm" v-model="vhost.upstream">
+                              <option value="">-- select --</option>
+                              <option v-for="u in config.upstreams" :key="u.name" :value="u.name">{{ u.name }}</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                          <span class="small text-muted">Endpoints</span>
+                          <button class="btn btn-outline-primary btn-sm" @click="addVhostEndpoint(vhost)">
+                            <i class="bi bi-plus-lg me-1"></i>Add
+                          </button>
+                        </div>
+                        <div class="d-flex flex-wrap gap-1 mb-2">
+                          <div v-for="(ep, epIdx) in vhost.endpoints" :key="epIdx" class="d-flex gap-1 align-items-center">
+                            <select
+                              class="form-select form-select-sm"
+                              style="width:90px;flex-shrink:0"
+                              v-model="ep.protocol"
+                              @change="onVhostProtocolChange(vhost, ep)"
+                            >
+                              <option>HTTP</option>
+                              <option>HTTPS</option>
+                            </select>
+                            <input
+                              class="form-control form-control-sm"
+                              type="number"
+                              min="1"
+                              max="65535"
+                              v-model.number="ep.port"
+                              style="width:80px;flex-shrink:0"
+                            />
+                            <button class="btn btn-outline-danger btn-sm" @click="removeVhostEndpoint(vhost, epIdx)">
+                              <i class="bi bi-trash3"></i>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div v-if="vhostHasHttps(vhost)">
+                          <label class="form-label mb-1 small text-muted">Certificate</label>
+                          <div class="d-flex gap-2 mb-1">
+                            <div class="form-check form-check-inline">
+                              <input
+                                class="form-check-input"
+                                type="radio"
+                                :name="'cert-mode-' + vIdx"
+                                :id="'cert-self-' + vIdx"
+                                :value="true"
+                                :checked="!vhost.cert_file"
+                                @change="vhost.cert_file = null; vhost.cert_selfsigned = vhost.cert_selfsigned || 'default'"
+                              />
+                              <label class="form-check-label small" :for="'cert-self-' + vIdx">Self-signed</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                              <input
+                                class="form-check-input"
+                                type="radio"
+                                :name="'cert-mode-' + vIdx"
+                                :id="'cert-file-' + vIdx"
+                                :value="false"
+                                :checked="!!vhost.cert_file"
+                                @change="vhost.cert_selfsigned = null; vhost.cert_file = vhost.cert_file || ''"
+                              />
+                              <label class="form-check-label small" :for="'cert-file-' + vIdx">Custom</label>
+                            </div>
+                          </div>
+                          <input
+                            v-if="!vhost.cert_file && vhost.cert_file !== ''"
+                            class="form-control form-control-sm"
+                            v-model="vhost.cert_selfsigned"
+                            placeholder="default"
+                          />
+                          <input
+                            v-else
+                            class="form-control form-control-sm"
+                            v-model="vhost.cert_file"
+                            placeholder='read_file("/etc/...cert"), read_file("/etc/...key")'
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
+                  <div v-if="config.vhosts.length === 0" class="col-12 text-muted small">No virtual hosts configured.</div>
                 </div>
               </div>
             </div>
@@ -783,21 +1087,6 @@ createApp({
                 </div>
               </div>
             </div>
-
-            <div class="card panel-card">
-              <div class="card-body">
-                <h6 class="card-title mb-3">Configuration Files</h6>
-                <div class="d-flex flex-nowrap gap-2 mb-3 config-file-actions">
-                  <button class="btn btn-primary btn-sm" :disabled="!canSaveConfig" @click="saveConfig">
-                    <i class="bi bi-floppy me-1"></i>{{ saving ? 'Saving...' : 'Save Config' }}
-                  </button>
-                  <button class="btn btn-outline-secondary btn-sm" :disabled="saving" @click="openLoadConfigModal">
-                    <i class="bi bi-folder2-open me-1"></i>Load Config
-                  </button>
-                </div>
-                <div v-if="saveMessage" class="alert alert-info py-2 small mb-3">{{ saveMessage }}</div>
-              </div>
-            </div>
           </div>
 
           <div v-else-if="activePanel === 'tester'" class="panel-area">
@@ -860,35 +1149,6 @@ createApp({
                     {{ containerStats.error }}
                   </div>
                 </div>
-                <div class="mb-3" v-if="statsHistory.length">
-                  <div class="small text-muted mb-1">CPU / RAM History (last {{ statsHistory.length }} samples)</div>
-                  <div class="mini-history">
-                    <div class="mini-history-row">
-                      <div class="mini-history-label">CPU %</div>
-                      <div class="mini-bars">
-                        <span
-                          v-for="(sample, index) in statsHistory"
-                          :key="'cpu-' + index"
-                          class="mini-bar mini-bar-cpu"
-                          :style="{ height: Math.max(6, sample.cpu) + '%' }"
-                          :title="sample.at + ' - ' + sample.cpuRaw.toFixed(2) + '%'"
-                        ></span>
-                      </div>
-                    </div>
-                    <div class="mini-history-row">
-                      <div class="mini-history-label">RAM %</div>
-                      <div class="mini-bars">
-                        <span
-                          v-for="(sample, index) in statsHistory"
-                          :key="'ram-' + index"
-                          class="mini-bar mini-bar-ram"
-                          :style="{ height: Math.max(6, sample.ram) + '%' }"
-                          :title="sample.at + ' - ' + sample.ramRaw.toFixed(2) + '%'"
-                        ></span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
                 <div class="mb-3">
                   <div class="small text-muted mb-1">Docker Output</div>
                   <div v-if="statusOutput" class="output-bar">
@@ -907,6 +1167,20 @@ createApp({
             </div>
           </div>
         </main>
+      </div>
+
+      <div class="app-footer">
+        <transition-group name="toast" tag="div" class="toast-stack">
+          <div
+            v-for="toast in toasts"
+            :key="toast.id"
+            class="toast-item"
+            :class="{ 'toast-success': toast.type === 'success', 'toast-danger': toast.type === 'danger', 'toast-info': toast.type === 'info' }"
+          >
+            <i class="bi me-2" :class="{ 'bi-check-circle-fill': toast.type === 'success', 'bi-exclamation-triangle-fill': toast.type === 'danger', 'bi-info-circle-fill': toast.type === 'info' }"></i>
+            {{ toast.message }}
+          </div>
+        </transition-group>
       </div>
 
       <div class="modal fade" tabindex="-1" ref="loadConfigModal">

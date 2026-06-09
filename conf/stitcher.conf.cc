@@ -49,19 +49,22 @@ service_config("service1hour", {.init_dvrwindow = 1h, .incr_dvrwindow = 60s});
 
 
 
+
+/* === UPSTREAM ORIGIN ===================== */
 /* === UPSTREAM ORIGIN ===================== */
 config.upstreams["upstream_origin"] = {
     .max_redirect = 10,
     .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_origin before_request url={}", request.get_url()); },
     .after_reply =
         [](cache::upstream_request& request, cache::upstream_reply& reply) {
-            stitcher::log().debug("upstream_origin after_reply url={} Cache-Control={} Expires={}", request.get_url(),
+            stitcher::log().debug("upstream_origin after_reply url={} Cache-Control={} Expires={}",
+                                  request.get_url(),
                                   reply.get_header(HTTP_HEADER_CACHE_CONTROL), reply.get_header(HTTP_HEADER_EXPIRES));
             reply.remove_header(HTTP_HEADER_CACHE_CONTROL);
             reply.remove_header(HTTP_HEADER_EXPIRES);
         },
     .default_expiration_function =
-        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
     .endpoints = {"https://origin.ridgeline.fr"},
 };
 
@@ -70,15 +73,33 @@ config.upstreams["upstream_qos"] = {
     .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_qos before_request url={}", request.get_url()); },
     .after_reply =
         [](cache::upstream_request& request, cache::upstream_reply& reply) {
-            stitcher::log().debug("upstream_qos after_reply url={} Cache-Control={} Expires={}", request.get_url(), reply.get_header(HTTP_HEADER_CACHE_CONTROL),
-                                  reply.get_header(HTTP_HEADER_EXPIRES));
+            stitcher::log().debug("upstream_qos after_reply url={} Cache-Control={} Expires={}",
+                                  request.get_url(),
+                                  reply.get_header(HTTP_HEADER_CACHE_CONTROL), reply.get_header(HTTP_HEADER_EXPIRES));
             reply.remove_header(HTTP_HEADER_CACHE_CONTROL);
             reply.remove_header(HTTP_HEADER_EXPIRES);
         },
     .default_expiration_function =
-        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
     .endpoints = {"http://qos.example.com"},
 };
+
+config.upstreams["upstream_test"] = {
+    .max_redirect = 10,
+    .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_test before_request url={}", request.get_url()); },
+    .after_reply =
+        [](cache::upstream_request& request, cache::upstream_reply& reply) {
+            stitcher::log().debug("upstream_test after_reply url={} Cache-Control={} Expires={}",
+                                  request.get_url(),
+                                  reply.get_header(HTTP_HEADER_CACHE_CONTROL), reply.get_header(HTTP_HEADER_EXPIRES));
+            reply.remove_header(HTTP_HEADER_CACHE_CONTROL);
+            reply.remove_header(HTTP_HEADER_EXPIRES);
+        },
+    .default_expiration_function =
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
+    .endpoints = {"http://197.30.248.202"},
+};
+
 
 auto& upstream_stitcher_conf = config.upstreams["upstream_stitcher"];
 upstream_stitcher_conf.after_reply = [](const cache::upstream_request&, cache::upstream_reply& reply) {
