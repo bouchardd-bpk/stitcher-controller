@@ -50,6 +50,8 @@ service_config("service1hour", {.init_dvrwindow = 1h, .incr_dvrwindow = 60s});
 
 
 
+
+/* === UPSTREAM ORIGIN ===================== */
 /* === UPSTREAM ORIGIN ===================== */
 /* === UPSTREAM ORIGIN ===================== */
 config.upstreams["upstream_origin"] = {
@@ -84,12 +86,12 @@ config.upstreams["upstream_qos"] = {
     .endpoints = {"http://qos.example.com"},
 };
 
-config.upstreams["upstream_test"] = {
+config.upstreams["upstream_test2"] = {
     .max_redirect = 10,
-    .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_test before_request url={}", request.get_url()); },
+    .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_test2 before_request url={}", request.get_url()); },
     .after_reply =
         [](cache::upstream_request& request, cache::upstream_reply& reply) {
-            stitcher::log().debug("upstream_test after_reply url={} Cache-Control={} Expires={}",
+            stitcher::log().debug("upstream_test2 after_reply url={} Cache-Control={} Expires={}",
                                   request.get_url(),
                                   reply.get_header(HTTP_HEADER_CACHE_CONTROL), reply.get_header(HTTP_HEADER_EXPIRES));
             reply.remove_header(HTTP_HEADER_CACHE_CONTROL);
@@ -99,6 +101,7 @@ config.upstreams["upstream_test"] = {
         hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
     .endpoints = {"http://197.30.248.202"},
 };
+
 
 
 auto& upstream_stitcher_conf = config.upstreams["upstream_stitcher"];
@@ -112,7 +115,6 @@ auto& vh = config.vhosts["vhost_streaming"];
 vh.pattern = ".*";
 vh.endpoints = {endpoint(HTTP, 80), endpoint(HTTPS, 443)};
 vh.certificates = {selfsigned_certificate("default")};
-// .certificates = {{read_file("/etc/broadpeak/hpc/ssl/certif.cert"), read_file("/etc/broadpeak/hpc/ssl/certif.key")}};
 
 auto& vh_qos = config.vhosts["vhost_qos"];
 vh_qos.pattern = ".*";

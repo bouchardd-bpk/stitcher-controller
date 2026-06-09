@@ -72,10 +72,52 @@ class ServiceConfigModel(BaseModel):
     settings: dict[str, str]
 
 
+class VhostEndpointModel(BaseModel):
+    protocol: str
+    port: int = Field(ge=1, le=65535)
+
+    @field_validator("protocol")
+    @classmethod
+    def validate_protocol(cls, protocol: str) -> str:
+        clean = str(protocol).strip().upper()
+        if clean not in {"HTTP", "HTTPS"}:
+            raise ValueError("Vhost endpoint protocol must be HTTP or HTTPS")
+        return clean
+
+
+class VhostModel(BaseModel):
+    name: str = Field(min_length=1)
+    var: str = Field(min_length=1)
+    pattern: str = Field(min_length=1)
+    endpoints: list[VhostEndpointModel]
+    cert_selfsigned: str | None = None
+    cert_file: str | None = None
+    upstream: str = Field(min_length=1)
+
+    @field_validator("name", "var", "pattern", "upstream")
+    @classmethod
+    def validate_non_empty_fields(cls, value: str) -> str:
+        clean = str(value).strip()
+        if not clean:
+            raise ValueError("Vhost field cannot be empty")
+        return clean
+
+    @field_validator("endpoints")
+    @classmethod
+    def validate_endpoints(
+        cls,
+        endpoints: list[VhostEndpointModel],
+    ) -> list[VhostEndpointModel]:
+        if not endpoints:
+            raise ValueError("Vhost must have at least one endpoint")
+        return endpoints
+
+
 class ConfigUpdateModel(BaseModel):
     default_settings: dict[str, str]
     services: list[ServiceConfigModel]
     upstreams: list[UpstreamModel]
+    vhosts: list[VhostModel]
 
     @field_validator("default_settings")
     @classmethod
@@ -141,6 +183,13 @@ class ConfigUpdateModel(BaseModel):
             raise ValueError("Duplicate upstream names")
         return self
 
+    @model_validator(mode="after")
+    def validate_vhost_names_unique(self) -> "ConfigUpdateModel":
+        names = [v.name for v in self.vhosts]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate vhost names")
+        return self
+
 
 class UrlTestModel(BaseModel):
     url: str = Field(min_length=1)
@@ -195,7 +244,6 @@ def clean_terminal_output(text: str) -> str:
         lines.append(normalized)
         last_effective = normalized
         pending_blank = False
-
     return "\n".join(lines).strip()
 
 
@@ -263,6 +311,13 @@ def get_container_stats() -> dict[str, Any]:
 
     output = clean_terminal_output(f"{proc.stdout}{proc.stderr}")
     if proc.returncode != 0 or not output:
+
+        @model_validator(mode="after")
+        def validate_vhost_names_unique(self) -> "ConfigUpdateModel":
+            names = [v.name for v in self.vhosts]
+            if len(names) != len(set(names)):
+                raise ValueError("Duplicate vhost names")
+            return self
         return {
             "ok": False,
             "running": stitcher_running(),
