@@ -52,8 +52,6 @@ service_config("service1hour", {.init_dvrwindow = 1h, .incr_dvrwindow = 60s});
 
 
 /* === UPSTREAM ORIGIN ===================== */
-/* === UPSTREAM ORIGIN ===================== */
-/* === UPSTREAM ORIGIN ===================== */
 config.upstreams["upstream_origin"] = {
     .max_redirect = 10,
     .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_origin before_request url={}", request.get_url()); },
@@ -66,7 +64,7 @@ config.upstreams["upstream_origin"] = {
             reply.remove_header(HTTP_HEADER_EXPIRES);
         },
     .default_expiration_function =
-        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
     .endpoints = {"https://origin.ridgeline.fr"},
 };
 
@@ -82,7 +80,7 @@ config.upstreams["upstream_qos"] = {
             reply.remove_header(HTTP_HEADER_EXPIRES);
         },
     .default_expiration_function =
-        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
     .endpoints = {"http://qos.example.com"},
 };
 
@@ -98,7 +96,7 @@ config.upstreams["upstream_test2"] = {
             reply.remove_header(HTTP_HEADER_EXPIRES);
         },
     .default_expiration_function =
-        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}}),
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
     .endpoints = {"http://197.30.248.202"},
 };
 

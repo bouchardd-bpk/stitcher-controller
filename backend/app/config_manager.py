@@ -239,8 +239,13 @@ _UPSTREAM_EXPIRATION = (
     '".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, '
     '{".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, '
     '{".dash", 7200s, 100ms}'
-    '}}'
+    '}'
     ')'
+)
+
+_UPSTREAM_SECTION_COMMENT = "/* === UPSTREAM ORIGIN ===================== */\n"
+_UPSTREAM_SECTION_COMMENT_RE = re.compile(
+    r'(?:/\* === UPSTREAM ORIGIN ===================== \*/\n)+',
 )
 
 
@@ -366,10 +371,9 @@ def apply_config_updates(
     if upstream_matches:
         first = upstream_matches[0].start()
         last = upstream_matches[-1].end()
-        section_comment = "/* === UPSTREAM ORIGIN ===================== */\n"
         text = (
             text[:first]
-            + section_comment
+            + _UPSTREAM_SECTION_COMMENT
             + rendered_upstreams
             + "\n"
             + text[last:]
@@ -383,6 +387,9 @@ def apply_config_updates(
                 + "\n\n"
                 + text[stitcher_match.start():]
             )
+
+    # Avoid accumulating duplicated section comments across successive saves.
+    text = _UPSTREAM_SECTION_COMMENT_RE.sub(_UPSTREAM_SECTION_COMMENT, text)
 
     # --- vhost + register_vhost section ---
     if vhosts:
