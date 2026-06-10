@@ -410,6 +410,51 @@ body {
   max-height: none;
 }
 
+.traffic-table-wrap {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #dbe7dc;
+  border-radius: 10px;
+  overflow: auto;
+  background: #f8fbf8;
+}
+
+.traffic-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.traffic-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #ecf4ed;
+  color: #365246;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.68rem;
+  border-bottom: 1px solid #dbe7dc;
+  padding: 0.55rem 0.6rem;
+}
+
+.traffic-table td {
+  border-bottom: 1px solid #e5efe6;
+  padding: 0.45rem 0.6rem;
+  vertical-align: top;
+}
+
+.traffic-cell-upstream,
+.traffic-cell-cache {
+  white-space: nowrap;
+}
+
+.traffic-cell-url {
+  font-family: "JetBrains Mono", monospace;
+  color: #243c30;
+  word-break: break-all;
+}
+
 .config-source-shell {
   flex: 1;
   min-height: 0;

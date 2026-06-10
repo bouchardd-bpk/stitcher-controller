@@ -240,6 +240,18 @@ ANSI_ESCAPE_RE = re.compile(
 START_JOB_PROGRESS_RE = re.compile(
     r"A start job is running for .*\(\d+s / no limit\)",
 )
+TRAFFIC_LINE_RE = re.compile(
+    r"(?P<upstream>[A-Za-z0-9_.-]+)\s+"
+    r"(?P<phase>before_request|after_reply)\s+"
+    r"url=(?P<url>\S+)"
+    r"(?:\s+Cache-Control=(?P<cache_control>.*?)\s+Expires=(?P<expires>.*))?$",
+)
+MANIFEST_EXTENSIONS = (
+    ".mpd",
+    ".m3u8",
+    ".ism/manifest",
+    ".dash",
+)
 
 
 def clean_terminal_output(text: str) -> str:
@@ -272,6 +284,43 @@ def clean_terminal_output(text: str) -> str:
         last_effective = normalized
         pending_blank = False
     return "\n".join(lines).strip()
+
+
+def strip_terminal_control(text: str) -> str:
+    cleaned = ANSI_ESCAPE_RE.sub("", text)
+    cleaned = cleaned.replace("\r", "")
+    cleaned = cleaned.replace("\x08", "")
+    return cleaned
+
+
+def is_manifest_path(path: str) -> bool:
+    return path.lower().endswith(MANIFEST_EXTENSIONS)
+
+
+def parse_traffic_event(raw_line: str) -> dict[str, Any] | None:
+    line = raw_line.strip()
+    if not line:
+        return None
+
+    match = TRAFFIC_LINE_RE.search(line)
+    if not match:
+        return None
+
+    url = (match.group("url") or "").strip()
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+
+    return {
+        "upstream": match.group("upstream"),
+        "phase": match.group("phase"),
+        "url": url,
+        "host": host,
+        "cache_control": (match.group("cache_control") or "").strip(),
+        "expires": (match.group("expires") or "").strip(),
+        "is_manifest": is_manifest_path(path),
+        "line": line,
+    }
 
 
 def run_stitcher_command(command: str) -> dict[str, Any]:
@@ -605,6 +654,59 @@ def get_docker_logs(tail: int = 300) -> dict[str, Any]:
         "ok": proc.returncode == 0,
         "tail": safe_tail,
         "logs": output,
+    }
+
+
+@app.get("/api/origin-traffic")
+def get_origin_traffic(
+    tail: int = 1200,
+    origin_host: str = "",
+    manifest_only: bool = False,
+) -> dict[str, Any]:
+    safe_tail = max(50, min(tail, 5000))
+    host_filter = origin_host.strip().lower()
+
+    proc = subprocess.run(
+        ["docker", "logs", "--tail", str(safe_tail), "stitcher"],
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    raw_output = strip_terminal_control(f"{proc.stdout}{proc.stderr}")
+    events: list[dict[str, Any]] = []
+
+    for raw_line in raw_output.splitlines():
+        event = parse_traffic_event(raw_line)
+        if not event:
+            continue
+
+        if host_filter and event["host"] != host_filter:
+            continue
+        if manifest_only and not event["is_manifest"]:
+            continue
+
+        events.append(event)
+
+    before_count = sum(
+        1 for event in events if event["phase"] == "before_request"
+    )
+    after_count = sum(1 for event in events if event["phase"] == "after_reply")
+    manifest_count = sum(1 for event in events if event["is_manifest"])
+
+    return {
+        "ok": proc.returncode == 0,
+        "tail": safe_tail,
+        "origin_host": host_filter,
+        "manifest_only": manifest_only,
+        "count": len(events),
+        "summary": {
+            "before_request": before_count,
+            "after_reply": after_count,
+            "manifest": manifest_count,
+        },
+        "events": events,
     }
 
 
