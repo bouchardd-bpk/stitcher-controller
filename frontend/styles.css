@@ -54,10 +54,19 @@ body {
 }
 
 .nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   color: #ffffff;
   font-weight: 700;
   font-size: 1rem;
   white-space: nowrap;
+}
+
+.nav-brand-logo {
+  width: 2em;
+  height: 2em;
+  flex: 0 0 auto;
 }
 
 .nav-actions {
@@ -530,6 +539,11 @@ body {
     font-size: 0.88rem;
   }
 
+  .nav-brand-logo {
+    width: 2em;
+    height: 2em;
+  }
+
   .nav-actions {
     gap: 0.35rem;
   }
@@ -643,7 +657,7 @@ body {
 }
 
 .footer-logo {
-  max-height: 18px;
+  max-height: 24px;
   width: auto;
   object-fit: contain;
 }

@@ -769,7 +769,8 @@ createApp({
       <nav class="hero-navbar">
         <div class="navbar-inner">
           <span class="nav-brand">
-            <i class="bi bi-broadcast-pin me-2"></i>Stitcher Controller
+            <img class="nav-brand-logo" src="/assets/stitcher.svg" alt="Stitcher logo" />
+            <span>Stitcher Controller</span>
           </span>
           <div class="nav-status">
             <span class="status-badge" :class="loading ? 'badge-processing' : statusBadgeClass">
