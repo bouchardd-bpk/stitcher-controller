@@ -35,6 +35,10 @@ createApp({
       loadConfigModal: null,
       pollTimer: null,
       outputPollTimer: null,
+      configModified: false,
+      needsReload: false,
+      isLoading: false,
+      navBusyLabel: "",
     };
   },
   computed: {
@@ -182,10 +186,19 @@ createApp({
       }
       return targets;
     },
+    isNavBusy() {
+      return this.loading || this.saving || this.testingUrl;
+    },
+    navBusyText() {
+      return this.navBusyLabel || "PROCESSING";
+    },
   },
   watch: {
     config: {
       handler(newConfig) {
+        // Don't mark as modified during loading
+        if (this.isLoading) return;
+        
         // Automatically clear certificate when no HTTPS endpoints
         if (newConfig.vhosts) {
           newConfig.vhosts.forEach((vhost) => {
@@ -195,8 +208,11 @@ createApp({
             }
           });
         }
+        // Mark config as modified
+        this.configModified = true;
       },
       deep: true,
+      flush: 'sync',
     },
     activePanel() {
       this.initializeTooltips();
@@ -479,6 +495,8 @@ createApp({
     async runAction(action) {
       this.loading = true;
       const labels = { start: "Starting Stitcher", stop: "Stopping Stitcher", reload: "Reloading configuration", restart: "Restarting Stitcher", init: "Initializing Stitcher" };
+      const busyLabels = { start: "STARTING", stop: "STOPPING", reload: "RELOADING", restart: "RESTARTING", init: "INITIALIZING" };
+      this.navBusyLabel = busyLabels[action] || "PROCESSING";
       this.showToast(labels[action] || action, "info");
       try {
         const data = await this.api(`/api/control/${action}`, { method: "POST" });
@@ -488,11 +506,15 @@ createApp({
         if (action === "init") {
           this.configReady = true;
         }
+        if (action === "reload") {
+          this.needsReload = false;
+        }
       } catch (error) {
         this.statusOutput = String(error.message || error);
         this.showToast(`Error: ${String(error.message || error).slice(0, 80)}`, "danger");
       } finally {
         this.loading = false;
+        this.navBusyLabel = "";
       }
     },
     normalizeConfig(data) {
@@ -560,11 +582,18 @@ createApp({
       });
     },
     async loadConfig() {
-      const data = await this.api("/api/config");
-      this.normalizeConfig(data);
-      this.rawConfigText = String(data.raw || "");
-      this.initializeTooltips();
-      this.initializeCodeHighlight();
+      this.isLoading = true;
+      try {
+        const data = await this.api("/api/config");
+        this.normalizeConfig(data);
+        this.rawConfigText = String(data.raw || "");
+        this.configModified = false;
+        this.needsReload = false;
+        this.initializeTooltips();
+        this.initializeCodeHighlight();
+      } finally {
+        this.isLoading = false;
+      }
     },
     async loadBackups() {
       const data = await this.api("/api/backups");
@@ -676,6 +705,7 @@ createApp({
       }));
 
       this.saving = true;
+      this.navBusyLabel = "SAVING";
       this.saveMessage = "";
       this.config.default_settings = normalizedDefaults;
       this.config.services = normalizedServices;
@@ -694,6 +724,8 @@ createApp({
           body: JSON.stringify(payload),
         });
         await this.loadConfig();
+        this.configModified = false;
+        this.needsReload = true;
         await this.loadBackups();
         this.saveMessage = `Saved. Backup: ${data.backup}`;
         this.showToast(`Saved. Backup: ${data.backup}`, "success");
@@ -702,6 +734,7 @@ createApp({
         this.showToast(`Save error: ${String(error.message || error).slice(0, 80)}`, "danger");
       } finally {
         this.saving = false;
+        this.navBusyLabel = "";
       }
     },
     async restoreBackup(name) {
@@ -721,6 +754,7 @@ createApp({
     },
     async testUrl() {
       this.testingUrl = true;
+      this.navBusyLabel = "TESTING";
       this.testResult = null;
       try {
         this.testResult = await this.api("/api/test-url", {
@@ -741,6 +775,7 @@ createApp({
         };
       } finally {
         this.testingUrl = false;
+        this.navBusyLabel = "";
       }
     },
     openPlayer() {
@@ -791,11 +826,11 @@ createApp({
             <span>Stitcher Controller</span>
           </span>
           <div class="nav-status">
-            <span class="status-badge" :class="loading ? 'badge-processing' : statusBadgeClass">
-              <span v-if="!loading" class="status-dot"></span>
-              <span v-if="loading" class="processing-content">
+            <span class="status-badge" :class="isNavBusy ? 'badge-processing' : statusBadgeClass">
+              <span v-if="!isNavBusy" class="status-dot"></span>
+              <span v-if="isNavBusy" class="processing-content">
                 <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                <span>PROCESSING</span>
+                <span>{{ navBusyText }}</span>
               </span>
               <span v-else>
                 {{ statusRunning ? 'RUNNING' : 'STOPPED' }}
@@ -829,10 +864,11 @@ createApp({
             </button>
             <button
               class="btn btn-secondary btn-sm"
+              :class="{ 'btn-pulsing': configModified }"
               :disabled="!canSaveConfig"
               @click="saveConfig"
             >
-              <i class="bi bi-floppy me-1"></i>{{ saving ? 'Saving...' : 'Save' }}
+              <i class="bi bi-floppy me-1"></i>Save
             </button>
             <button
               class="btn btn-secondary btn-sm"
@@ -842,11 +878,13 @@ createApp({
               <i class="bi bi-folder2-open me-1"></i>Load
             </button>
             <button
-              class="btn btn-secondary btn-sm"
+              class="btn btn-secondary btn-sm position-relative"
+              :class="{ 'btn-info': needsReload }"
               :disabled="loading || !statusRunning"
               @click="runAction('reload')"
             >
               <i class="bi bi-arrow-clockwise me-1"></i>Reload
+              <span v-if="needsReload" class="position-absolute top-0 start-100 translate-middle bg-info rounded-circle" style="width: 0.375rem; height: 0.375rem;"></span>
             </button>
           </div>
         </div>
@@ -1333,7 +1371,7 @@ createApp({
                 <div class="input-group mb-3">
                   <input class="form-control" v-model="testUrlValue" placeholder="Enter URL to test" />
                   <button class="btn btn-primary" :disabled="testingUrl || !testUrlValue" @click="testUrl">
-                    <i class="bi bi-send me-1"></i>{{ testingUrl ? 'Testing...' : 'Test' }}
+                    <i class="bi bi-send me-1"></i>Test
                   </button>
                   <button class="btn btn-outline-primary" :disabled="!testUrlValue" @click="openPlayer">
                     <i class="bi bi-play-circle me-1"></i>Player

@@ -10,11 +10,11 @@ using namespace stitcher_conf;
 init_stitcher(product, "upstream_stitcher");
 
 /* === product settings =================== */
-product.default_settings.network_monitoring.is_enabled = false;
-product.default_settings.monitoring.metrics.is_enabled = false;
-product.default_settings.monitoring.storage.is_enabled = false;
-product.default_settings.monitoring.services_upstreams.active.is_enabled = false;
-product.default_settings.monitoring.services_upstreams.passive.is_enabled = false;
+product.default_settings.network_monitoring.is_enabled = true;
+product.default_settings.monitoring.metrics.is_enabled = true;
+product.default_settings.monitoring.storage.is_enabled = true;
+product.default_settings.monitoring.services_upstreams.active.is_enabled = true;
+product.default_settings.monitoring.services_upstreams.passive.is_enabled = true;
 
 product.default_settings.req_logs_config.txt_config = {
     .is_activated = true,
@@ -48,8 +48,8 @@ default_config({
                 // ui_meta: {"label":"Manifest expiration","tooltip":"Validity/cache duration for generated manifests (example: 1s)."}
                 .manifest_expiration = 1s
 });
-service_config("ARTE", {.init_dvrwindow = 600s, .incr_dvrwindow = 15s});
-service_config("7ANS", {.init_dvrwindow = 360s});
+service_config("ARTE", {.init_dvrwindow = 600s, .param_dvrwindow = "30s"});
+service_config("7ANS", {.init_dvrwindow = 600s, .param_dvrwindow = "30s"});
 
 /* === UPSTREAM ORIGIN ===================== */
 config.upstreams["upstream_origin"] = {
