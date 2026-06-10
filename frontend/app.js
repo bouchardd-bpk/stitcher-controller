@@ -23,6 +23,8 @@ createApp({
       testResult: null,
       config: {
         default_settings: [],
+        monitoring_enabled: false,
+        prometheus_port: 11450,
         services: [],
         upstreams: [],
         vhosts: [],
@@ -100,10 +102,37 @@ createApp({
     hasInvalidDefaultSettings() {
       return this.defaultSettingValidation.some((item) => !item.ok);
     },
+    prometheusPortValidation() {
+      const value = Number(this.config.prometheus_port);
+      if (!Number.isInteger(value) || value < 1 || value > 65535) {
+        return {
+          ok: false,
+          message: "Prometheus port must be an integer between 1 and 65535",
+        };
+      }
+      return { ok: true, message: "" };
+    },
+    hasInvalidMonitoring() {
+      return !this.prometheusPortValidation.ok;
+    },
     defaultSettingKeys() {
       return this.config.default_settings
         .map((setting) => String(setting.key ?? "").trim())
         .filter((key, index, source) => key && source.indexOf(key) === index);
+    },
+    defaultSettingUiByKey() {
+      const result = {};
+      for (const setting of this.config.default_settings) {
+        const key = String(setting.key ?? "").trim();
+        if (!key) {
+          continue;
+        }
+        result[key] = {
+          label: String(setting.label ?? "").trim(),
+          tooltip: String(setting.tooltip ?? "").trim(),
+        };
+      }
+      return result;
     },
     serviceValidation() {
       const defaultSet = new Set(this.defaultSettingKeys);
@@ -138,7 +167,12 @@ createApp({
       return this.serviceValidation.some((item) => !item.ok);
     },
     canSaveConfig() {
-      return !this.saving && !this.hasInvalidUpstreams && !this.hasInvalidDefaultSettings && !this.hasInvalidServices && !this.hasInvalidVhosts;
+      return !this.saving
+        && !this.hasInvalidUpstreams
+        && !this.hasInvalidDefaultSettings
+        && !this.hasInvalidMonitoring
+        && !this.hasInvalidServices
+        && !this.hasInvalidVhosts;
     },
     availableConfigTargets() {
       const targets = [{ value: "current", label: "Current config file" }];
@@ -162,6 +196,9 @@ createApp({
         }
       },
       deep: true,
+    },
+    activePanel() {
+      this.initializeTooltips();
     },
   },
   methods: {
@@ -210,6 +247,8 @@ createApp({
       return {
         key: "",
         value: "",
+        label: "",
+        tooltip: "",
       };
     },
     addDefaultSetting() {
@@ -263,6 +302,22 @@ createApp({
         result.unshift(keyInRow);
       }
       return result;
+    },
+    defaultSettingDisplayName(key) {
+      const normalizedKey = String(key ?? "").trim();
+      if (!normalizedKey) {
+        return "";
+      }
+      const meta = this.defaultSettingUiByKey[normalizedKey] || {};
+      return meta.label || normalizedKey;
+    },
+    defaultSettingTooltip(key) {
+      const normalizedKey = String(key ?? "").trim();
+      if (!normalizedKey) {
+        return "";
+      }
+      const meta = this.defaultSettingUiByKey[normalizedKey] || {};
+      return meta.tooltip || "";
     },
     addVhost() {
       const upstreamNames = this.config.upstreams.map((u) => u.name).filter(Boolean);
@@ -440,10 +495,18 @@ createApp({
     },
     normalizeConfig(data) {
       const defaults = data.default_settings || {};
+      const defaultsMeta = data.default_settings_meta || {};
       this.config.default_settings = Object.entries(defaults).map(([key, value]) => ({
         key,
         value: String(key).startsWith("param_") ? this.stripOuterQuotes(value) : String(value ?? ""),
+        label: String(defaultsMeta[key]?.label ?? ""),
+        tooltip: String(defaultsMeta[key]?.tooltip ?? ""),
       }));
+
+      this.config.monitoring_enabled = Boolean(data.monitoring_enabled);
+      this.config.prometheus_port = Number.isInteger(Number(data.prometheus_port))
+        ? Number(data.prometheus_port)
+        : 11450;
 
       this.config.services = (data.services || []).map((service) => ({
         name: service.name,
@@ -468,9 +531,23 @@ createApp({
         upstream: v.upstream || "",
       }));
     },
+    initializeTooltips() {
+      this.$nextTick(() => {
+        const tooltipElements = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+        tooltipElements.forEach((el) => {
+          const instance = globalThis.bootstrap.Tooltip.getInstance(el);
+          if (instance) {
+            instance.dispose();
+          }
+          // eslint-disable-next-line no-unused-vars
+          const _ = globalThis.bootstrap.Tooltip.getOrCreateInstance(el);
+        });
+      });
+    },
     async loadConfig() {
       const data = await this.api("/api/config");
       this.normalizeConfig(data);
+      this.initializeTooltips();
     },
     async loadBackups() {
       const data = await this.api("/api/backups");
@@ -514,6 +591,8 @@ createApp({
       const normalizedDefaults = this.config.default_settings.map((setting) => ({
         key: String(setting.key ?? "").trim(),
         value: String(setting.value ?? "").trim(),
+        label: String(setting.label ?? "").trim(),
+        tooltip: String(setting.tooltip ?? "").trim(),
       }));
       const defaultValidation = normalizedDefaults.map((setting, index) => this.defaultSettingValidation[index] || { ok: true });
       const firstInvalidDefault = defaultValidation.findIndex((item) => !item.ok);
@@ -542,8 +621,15 @@ createApp({
       }
 
       const defaultSettingsPayload = {};
+      const defaultSettingsMetaPayload = {};
       for (const setting of normalizedDefaults) {
         defaultSettingsPayload[setting.key] = this.formatSettingValueForKey(setting.key, setting.value);
+        if (setting.label || setting.tooltip) {
+          defaultSettingsMetaPayload[setting.key] = {
+            label: setting.label,
+            tooltip: setting.tooltip,
+          };
+        }
       }
 
       const servicesPayload = normalizedServices.map((service) => {
@@ -579,6 +665,9 @@ createApp({
       try {
         const payload = {
           default_settings: defaultSettingsPayload,
+          default_settings_meta: defaultSettingsMetaPayload,
+          monitoring_enabled: Boolean(this.config.monitoring_enabled),
+          prometheus_port: Number(this.config.prometheus_port),
           services: servicesPayload,
           upstreams: upstreamsPayload,
           vhosts: vhostsPayload,
@@ -672,6 +761,7 @@ createApp({
         this.refreshOutputPanel();
       }
     }, 10000);
+    this.initializeTooltips();
   },
   unmounted() {
     if (this.loadConfigModal) {
@@ -706,7 +796,7 @@ createApp({
           <div class="nav-actions">
             <button
               v-if="!configReady"
-              class="btn btn-primary btn-sm"
+              class="btn btn-secondary btn-sm"
               :disabled="loading"
               @click="runAction('init')"
             >
@@ -729,21 +819,21 @@ createApp({
               <i class="bi bi-stop-fill me-1"></i>Stop
             </button>
             <button
-              class="btn btn-primary btn-sm"
+              class="btn btn-secondary btn-sm"
               :disabled="!canSaveConfig"
               @click="saveConfig"
             >
               <i class="bi bi-floppy me-1"></i>{{ saving ? 'Saving...' : 'Save' }}
             </button>
             <button
-              class="btn btn-primary btn-sm"
+              class="btn btn-secondary btn-sm"
               :disabled="saving"
               @click="openLoadConfigModal"
             >
               <i class="bi bi-folder2-open me-1"></i>Load
             </button>
             <button
-              class="btn btn-primary btn-sm"
+              class="btn btn-secondary btn-sm"
               :disabled="loading || !statusRunning"
               @click="runAction('reload')"
             >
@@ -765,6 +855,14 @@ createApp({
           </button>
           <button
             class="sidebar-btn"
+            :class="{ active: activePanel === 'defaults' }"
+            @click="activePanel = 'defaults'"
+            title="Default Settings"
+          >
+            <i class="bi bi-sliders"></i>
+          </button>
+          <button
+            class="sidebar-btn"
             :class="{ active: activePanel === 'tester' }"
             @click="activePanel = 'tester'"
             title="URL Tester"
@@ -782,59 +880,200 @@ createApp({
         </aside>
 
         <main class="main-content">
-          <div v-if="activePanel === 'config'" class="panel-area">
-            <div class="row g-3 mb-1">
-              <div class="col-12 col-xl-6">
-                <div class="card panel-card h-100">
-                  <div class="card-body">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                      <h6 class="card-title mb-0">Default Settings</h6>
-                      <button class="btn btn-primary btn-sm" @click="addDefaultSetting">
-                        <i class="bi bi-plus-lg me-1"></i>Add parameter
-                      </button>
+          <div v-if="activePanel === 'defaults'" class="panel-area">
+            <div class="card panel-card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="card-title mb-0">Default Settings</h6>
+                  <button class="btn btn-outline-primary btn-sm" @click="addDefaultSetting">
+                    <i class="bi bi-plus-lg me-1"></i>Add parameter
+                  </button>
+                </div>
+                <div class="default-settings-head small text-muted mb-2">
+                  <span data-bs-toggle="tooltip" data-bs-title="Internal parameter name used in configuration" data-bs-delay='{"show": 500, "hide": 100}'>Parameter</span>
+                  <span data-bs-toggle="tooltip" data-bs-title="Default value if parameter not overridden in services" data-bs-delay='{"show": 500, "hide": 100}'>Default value</span>
+                  <span data-bs-toggle="tooltip" data-bs-title="Human-readable label shown in the UI" data-bs-delay='{"show": 500, "hide": 100}'>Display name</span>
+                  <span data-bs-toggle="tooltip" data-bs-title="Tooltip text shown when hovering over the parameter" data-bs-delay='{"show": 500, "hide": 100}'>Tooltip</span>
+                  <span></span>
+                </div>
+                <div class="d-flex flex-column gap-2">
+                  <div
+                    v-for="(setting, index) in config.default_settings"
+                    :key="index"
+                    class="default-setting-row"
+                  >
+                    <input
+                      class="form-control form-control-sm"
+                      :class="{ 'is-invalid': !defaultSettingValidation[index].ok }"
+                      v-model="setting.key"
+                      placeholder="parameter_name"
+                    />
+                    <input
+                      class="form-control form-control-sm"
+                      :class="{ 'is-invalid': !defaultSettingValidation[index].ok }"
+                      v-model="setting.value"
+                      placeholder="default value"
+                    />
+                    <input
+                      class="form-control form-control-sm"
+                      v-model="setting.label"
+                      placeholder="Friendly name in Configuration"
+                    />
+                    <input
+                      class="form-control form-control-sm"
+                      v-model="setting.tooltip"
+                      placeholder="Tooltip shown in Configuration"
+                    />
+                    <button class="btn btn-outline-danger btn-sm" @click="removeDefaultSetting(index)">
+                      <i class="bi bi-trash3"></i>
+                    </button>
+                    <div v-if="!defaultSettingValidation[index].ok" class="invalid-feedback d-block">
+                      {{ defaultSettingValidation[index].message }}
                     </div>
-                    <div class="d-flex flex-column gap-2">
-                      <div
-                        v-for="(setting, index) in config.default_settings"
-                        :key="index"
-                        class="setting-inline-row"
-                      >
-                        <label class="form-label mb-0 small text-muted">Name</label>
+                  </div>
+                </div>
+                <div v-if="config.default_settings.length === 0" class="text-muted small mt-1">
+                  No default parameter configured.
+                </div>
+              </div>
+            </div>
+
+            <div class="card panel-card">
+              <div class="card-body">
+                <h6 class="card-title mb-3">Monitoring</h6>
+                <div class="monitoring-box">
+                  <div class="monitoring-grid">
+                    <div>
+                      <div class="small text-muted mb-1">Monitoring state</div>
+                      <div class="form-check form-check-inline">
                         <input
-                          class="form-control form-control-sm"
-                          :class="{ 'is-invalid': !defaultSettingValidation[index].ok }"
-                          v-model="setting.key"
-                          placeholder="parameter_name"
+                          class="form-check-input"
+                          type="radio"
+                          name="monitoring-enabled"
+                          id="monitoring-on"
+                          :value="true"
+                          v-model="config.monitoring_enabled"
                         />
-                        <label class="form-label mb-0 small text-muted">Value</label>
+                        <label class="form-check-label" for="monitoring-on">On</label>
+                      </div>
+                      <div class="form-check form-check-inline">
                         <input
-                          class="form-control form-control-sm"
-                          :class="{ 'is-invalid': !defaultSettingValidation[index].ok }"
-                          v-model="setting.value"
-                          placeholder="default value"
+                          class="form-check-input"
+                          type="radio"
+                          name="monitoring-enabled"
+                          id="monitoring-off"
+                          :value="false"
+                          v-model="config.monitoring_enabled"
                         />
-                        <button class="btn btn-outline-danger btn-sm" @click="removeDefaultSetting(index)">
-                          <i class="bi bi-trash3"></i>
-                        </button>
-                        <div v-if="!defaultSettingValidation[index].ok" class="invalid-feedback d-block">
-                          {{ defaultSettingValidation[index].message }}
-                        </div>
+                        <label class="form-check-label" for="monitoring-off">Off</label>
                       </div>
                     </div>
-                    <div v-if="config.default_settings.length === 0" class="text-muted small mt-1">
-                      No default parameter configured.
+                    <div>
+                      <label class="form-label mb-1 small text-muted" for="prometheus-port">Prometheus port</label>
+                      <input
+                        id="prometheus-port"
+                        class="form-control form-control-sm"
+                        :class="{ 'is-invalid': !prometheusPortValidation.ok }"
+                        type="number"
+                        min="1"
+                        max="65535"
+                        step="1"
+                        v-model.number="config.prometheus_port"
+                        placeholder="11450"
+                      />
+                      <div v-if="!prometheusPortValidation.ok" class="invalid-feedback d-block">
+                        {{ prometheusPortValidation.message }}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
 
+          <div v-else-if="activePanel === 'config'" class="panel-area">
+            <div class="card panel-card">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="card-title mb-0">Services</h6>
+                  <button class="btn btn-outline-primary btn-sm" @click="addService">
+                    <i class="bi bi-plus-lg me-1"></i>Add service
+                  </button>
+                </div>
+                <div class="row g-3">
+                  <div
+                    v-for="(service, index) in config.services"
+                    :key="index"
+                    class="col-12 col-md-6 col-xl-4"
+                  >
+                    <div class="card service-grid-card h-100 border-0">
+                      <div class="card-body">
+                        <div class="service-name-row mb-2">
+                          <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" data-bs-title="Unique service identifier" data-bs-delay='{"show": 500, "hide": 100}'>Name</label>
+                          <input class="form-control form-control-sm" v-model="service.name" data-bs-toggle="tooltip" data-bs-title="Service name used in configuration" data-bs-delay='{"show": 500, "hide": 100}' />
+                          <button class="btn btn-outline-danger btn-sm" @click="removeService(index)">
+                            <i class="bi bi-trash3"></i>
+                          </button>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                          <span class="small text-muted" data-bs-toggle="tooltip" data-bs-title="Override default settings for this service" data-bs-delay='{"show": 500, "hide": 100}'>Default Settings Overrides</span>
+                          <button
+                            class="btn btn-outline-primary btn-sm"
+                            :disabled="defaultSettingKeys.length === 0"
+                            @click="addServiceOverride(service)"
+                          >
+                            <i class="bi bi-plus-lg me-1"></i>Add override
+                          </button>
+                        </div>
+                        <div class="d-flex flex-column gap-2">
+                          <div v-for="(override, overrideIndex) in service.settings" :key="overrideIndex" class="service-override-row">
+                            <select
+                              class="form-select form-select-sm"
+                              v-model="override.key"
+                              data-bs-toggle="tooltip"
+                              :data-bs-title="defaultSettingTooltip(override.key) || ''"
+                              data-bs-delay='{"show": 500, "hide": 100}'
+                            >
+                              <option
+                                v-for="option in overrideOptions(service, override.key)"
+                                :key="option"
+                                :value="option"
+                              >
+                                {{ defaultSettingDisplayName(option) }}
+                              </option>
+                            </select>
+                            <input
+                              class="form-control form-control-sm"
+                              v-model="override.value"
+                              placeholder="override value"
+                              data-bs-toggle="tooltip"
+                              :data-bs-title="defaultSettingTooltip(override.key) || ''"
+                              data-bs-delay='{"show": 500, "hide": 100}'
+                            />
+                            <button class="btn btn-outline-danger btn-sm" @click="removeServiceOverride(service, overrideIndex)">
+                              <i class="bi bi-trash3"></i>
+                            </button>
+                          </div>
+                        </div>
+                        <div v-if="service.settings.length === 0" class="text-muted small">
+                          No override for this service.
+                        </div>
+                        <div v-if="!serviceValidation[index].ok" class="text-danger small mt-2">
+                          {{ serviceValidation[index].message }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="config.services.length === 0" class="col-12 text-muted small">No services configured.</div>
+                </div>
+              </div>
             </div>
 
             <div class="card panel-card">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                   <h6 class="card-title mb-0">Upstreams</h6>
-                  <button class="btn btn-primary btn-sm" @click="addUpstream">
+                  <button class="btn btn-outline-primary btn-sm" @click="addUpstream">
                     <i class="bi bi-plus-lg me-1"></i>Add upstream
                   </button>
                 </div>
@@ -847,12 +1086,15 @@ createApp({
                     <div class="card service-grid-card h-100 border-0">
                       <div class="card-body">
                         <div class="service-name-row mb-2">
-                          <label class="form-label mb-0 small text-muted">Name</label>
+                          <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" data-bs-title="Unique upstream origin identifier" data-bs-delay='{"show": 500, "hide": 100}'>Name</label>
                           <input
                             class="form-control form-control-sm"
                             :class="{ 'is-invalid': !upstreamValidation[uIdx].ok }"
                             v-model="upstream.name"
                             placeholder="upstream_origin"
+                            data-bs-toggle="tooltip"
+                            data-bs-title="Origin/upstream name used in virtual host routing"
+                            data-bs-delay='{"show": 500, "hide": 100}'
                           />
                           <button class="btn btn-outline-danger btn-sm" @click="removeUpstream(uIdx)">
                             <i class="bi bi-trash3"></i>
@@ -862,7 +1104,7 @@ createApp({
                           {{ upstreamValidation[uIdx].message }}
                         </div>
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                          <span class="small text-muted">Endpoints</span>
+                          <span class="small text-muted" data-bs-toggle="tooltip" data-bs-title="Backend server URLs" data-bs-delay='{"show": 500, "hide": 100}'>Endpoints</span>
                           <button class="btn btn-outline-primary btn-sm" @click="addUpstreamEndpoint(upstream)">
                             <i class="bi bi-plus-lg me-1"></i>Add
                           </button>
@@ -878,6 +1120,9 @@ createApp({
                               :class="{ 'is-invalid': !validateEndpoint(ep).ok }"
                               v-model="upstream.endpoints[epIdx]"
                               placeholder="https://origin.example.com"
+                              data-bs-toggle="tooltip"
+                              data-bs-title="Full URL of the upstream server (e.g., https://origin.example.com:8080)"
+                              data-bs-delay='{"show": 500, "hide": 100}'
                             />
                             <button class="btn btn-outline-danger btn-sm" @click="removeUpstreamEndpoint(upstream, epIdx)">
                               <i class="bi bi-trash3"></i>
@@ -902,7 +1147,7 @@ createApp({
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                   <h6 class="card-title mb-0">Virtual Hosts</h6>
-                  <button class="btn btn-primary btn-sm" @click="addVhost">
+                  <button class="btn btn-outline-primary btn-sm" @click="addVhost">
                     <i class="bi bi-plus-lg me-1"></i>Add vhost
                   </button>
                 </div>
@@ -915,12 +1160,15 @@ createApp({
                     <div class="card service-grid-card h-100 border-0">
                       <div class="card-body">
                         <div class="service-name-row mb-2">
-                          <label class="form-label mb-0 small text-muted">Name</label>
+                          <label class="form-label mb-0 small text-muted" data-bs-toggle="tooltip" data-bs-title="Unique virtual host identifier" data-bs-delay='{"show": 500, "hide": 100}'>Name</label>
                           <input
                             class="form-control form-control-sm"
                             :class="{ 'is-invalid': !vhostValidation[vIdx].ok }"
                             v-model="vhost.name"
                             placeholder="vhost_streaming"
+                            data-bs-toggle="tooltip"
+                            data-bs-title="Virtual host name used in configuration"
+                            data-bs-delay='{"show": 500, "hide": 100}'
                           />
                           <button class="btn btn-outline-danger btn-sm" @click="removeVhost(vIdx)">
                             <i class="bi bi-trash3"></i>
@@ -932,12 +1180,12 @@ createApp({
 
                         <div class="row g-2 mb-2">
                           <div class="col-6">
-                            <label class="form-label mb-1 small text-muted">Pattern (regex)</label>
-                            <input class="form-control form-control-sm" v-model="vhost.pattern" placeholder=".*" />
+                            <label class="form-label mb-1 small text-muted" data-bs-toggle="tooltip" data-bs-title="Regular expression to match incoming request URLs" data-bs-delay='{"show": 500, "hide": 100}'>Pattern (regex)</label>
+                            <input class="form-control form-control-sm" v-model="vhost.pattern" placeholder=".*" data-bs-toggle="tooltip" data-bs-title="Regex pattern (e.g., .* for all requests, .*/live/.* for specific paths)" data-bs-delay='{"show": 500, "hide": 100}' />
                           </div>
                           <div class="col-6">
-                            <label class="form-label mb-1 small text-muted">Upstream</label>
-                            <select class="form-select form-select-sm" v-model="vhost.upstream">
+                            <label class="form-label mb-1 small text-muted" data-bs-toggle="tooltip" data-bs-title="Upstream origin to route matching requests to" data-bs-delay='{"show": 500, "hide": 100}'>Upstream</label>
+                            <select class="form-select form-select-sm" v-model="vhost.upstream" data-bs-toggle="tooltip" data-bs-title="Select the upstream server to proxy requests to" data-bs-delay='{"show": 500, "hide": 100}'>
                               <option value="">-- select --</option>
                               <option v-for="u in config.upstreams" :key="u.name" :value="u.name">{{ u.name }}</option>
                             </select>
@@ -945,7 +1193,7 @@ createApp({
                         </div>
 
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                          <span class="small text-muted">Endpoints</span>
+                          <span class="small text-muted" data-bs-toggle="tooltip" data-bs-title="Listen addresses for this virtual host" data-bs-delay='{"show": 500, "hide": 100}'>Endpoints</span>
                           <button class="btn btn-outline-primary btn-sm" @click="addVhostEndpoint(vhost)">
                             <i class="bi bi-plus-lg me-1"></i>Add
                           </button>
@@ -957,6 +1205,9 @@ createApp({
                               style="width:90px;flex-shrink:0"
                               v-model="ep.protocol"
                               @change="onVhostProtocolChange(vhost, ep)"
+                              data-bs-toggle="tooltip"
+                              data-bs-title="Protocol: HTTP or HTTPS"
+                              data-bs-delay='{"show": 500, "hide": 100}'
                             >
                               <option>HTTP</option>
                               <option>HTTPS</option>
@@ -968,6 +1219,9 @@ createApp({
                               max="65535"
                               v-model.number="ep.port"
                               style="width:80px;flex-shrink:0"
+                              data-bs-toggle="tooltip"
+                              data-bs-title="Port number (1-65535)"
+                              data-bs-delay='{"show": 500, "hide": 100}'
                             />
                             <button class="btn btn-outline-danger btn-sm" @click="removeVhostEndpoint(vhost, epIdx)">
                               <i class="bi bi-trash3"></i>
@@ -976,7 +1230,7 @@ createApp({
                         </div>
 
                         <div v-if="vhostHasHttps(vhost)">
-                          <label class="form-label mb-1 small text-muted">Certificate</label>
+                          <label class="form-label mb-1 small text-muted" data-bs-toggle="tooltip" data-bs-title="SSL/TLS certificate configuration for HTTPS endpoints" data-bs-delay='{"show": 500, "hide": 100}'>Certificate</label>
                           <div class="d-flex gap-2 mb-1">
                             <div class="form-check form-check-inline">
                               <input
@@ -987,8 +1241,11 @@ createApp({
                                 :value="true"
                                 :checked="!vhost.cert_file"
                                 @change="vhost.cert_file = null; vhost.cert_selfsigned = vhost.cert_selfsigned || 'default'"
+                                data-bs-toggle="tooltip"
+                                data-bs-title="Use self-signed certificate (auto-generated)"
+                                data-bs-delay='{"show": 500, "hide": 100}'
                               />
-                              <label class="form-check-label small" :for="'cert-self-' + vIdx">Self-signed</label>
+                              <label class="form-check-label small" :for="'cert-self-' + vIdx" data-bs-toggle="tooltip" data-bs-title="Use self-signed certificate (auto-generated)" data-bs-delay='{"show": 500, "hide": 100}'>Self-signed</label>
                             </div>
                             <div class="form-check form-check-inline">
                               <input
@@ -999,8 +1256,11 @@ createApp({
                                 :value="false"
                                 :checked="!!vhost.cert_file"
                                 @change="vhost.cert_selfsigned = null; vhost.cert_file = vhost.cert_file || ''"
+                                data-bs-toggle="tooltip"
+                                data-bs-title="Use custom certificate file"
+                                data-bs-delay='{"show": 500, "hide": 100}'
                               />
-                              <label class="form-check-label small" :for="'cert-file-' + vIdx">Custom</label>
+                              <label class="form-check-label small" :for="'cert-file-' + vIdx" data-bs-toggle="tooltip" data-bs-title="Use custom certificate file" data-bs-delay='{"show": 500, "hide": 100}'>Custom</label>
                             </div>
                           </div>
                           <input
@@ -1008,12 +1268,18 @@ createApp({
                             class="form-control form-control-sm"
                             v-model="vhost.cert_selfsigned"
                             placeholder="default"
+                            data-bs-toggle="tooltip"
+                            data-bs-title="Self-signed certificate identifier (e.g., 'default', 'custom-cert')"
+                            data-bs-delay='{"show": 500, "hide": 100}'
                           />
                           <input
                             v-else
                             class="form-control form-control-sm"
                             v-model="vhost.cert_file"
                             placeholder='read_file("/etc/...cert"), read_file("/etc/...key")'
+                            data-bs-toggle="tooltip"
+                            data-bs-title='Custom certificate file reference (e.g., read_file("/etc/certs/cert.pem"), read_file("/etc/certs/key.pem"))'
+                            data-bs-delay='{"show": 500, "hide": 100}'
                           />
                         </div>
                       </div>
@@ -1024,69 +1290,6 @@ createApp({
               </div>
             </div>
 
-            <div class="card panel-card">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                  <h6 class="card-title mb-0">Services</h6>
-                  <button class="btn btn-primary btn-sm" @click="addService">
-                    <i class="bi bi-plus-lg me-1"></i>Add service
-                  </button>
-                </div>
-                <div class="row g-3">
-                  <div
-                    v-for="(service, index) in config.services"
-                    :key="index"
-                    class="col-12 col-md-6 col-xl-4"
-                  >
-                    <div class="card service-grid-card h-100 border-0">
-                      <div class="card-body">
-                        <div class="service-name-row mb-2">
-                          <label class="form-label mb-0 small text-muted">Name</label>
-                          <input class="form-control form-control-sm" v-model="service.name" />
-                          <button class="btn btn-outline-danger btn-sm" @click="removeService(index)">
-                            <i class="bi bi-trash3"></i>
-                          </button>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                          <span class="small text-muted">Default Settings Overrides</span>
-                          <button
-                            class="btn btn-outline-primary btn-sm"
-                            :disabled="defaultSettingKeys.length === 0"
-                            @click="addServiceOverride(service)"
-                          >
-                            <i class="bi bi-plus-lg me-1"></i>Add override
-                          </button>
-                        </div>
-                        <div class="d-flex flex-column gap-2">
-                          <div v-for="(override, overrideIndex) in service.settings" :key="overrideIndex" class="service-override-row">
-                            <select class="form-select form-select-sm" v-model="override.key">
-                              <option
-                                v-for="option in overrideOptions(service, override.key)"
-                                :key="option"
-                                :value="option"
-                              >
-                                {{ option }}
-                              </option>
-                            </select>
-                            <input class="form-control form-control-sm" v-model="override.value" placeholder="override value" />
-                            <button class="btn btn-outline-danger btn-sm" @click="removeServiceOverride(service, overrideIndex)">
-                              <i class="bi bi-trash3"></i>
-                            </button>
-                          </div>
-                        </div>
-                        <div v-if="service.settings.length === 0" class="text-muted small">
-                          No override for this service.
-                        </div>
-                        <div v-if="!serviceValidation[index].ok" class="text-danger small mt-2">
-                          {{ serviceValidation[index].message }}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div v-if="config.services.length === 0" class="col-12 text-muted small">No services configured.</div>
-                </div>
-              </div>
-            </div>
           </div>
 
           <div v-else-if="activePanel === 'tester'" class="panel-area">
@@ -1122,10 +1325,10 @@ createApp({
             </div>
           </div>
 
-          <div v-else class="panel-area">
-            <div class="card panel-card">
-              <div class="card-body">
-                <div class="mb-3">
+          <div v-else class="panel-area panel-area-output">
+            <div class="card panel-card panel-card-output">
+              <div class="card-body card-body-output">
+                <div class="mb-3 output-section-fixed">
                   <div class="small text-muted mb-1">Container Resources</div>
                   <div class="stats-grid" v-if="containerStats">
                     <div class="stats-tile">
@@ -1149,17 +1352,17 @@ createApp({
                     {{ containerStats.error }}
                   </div>
                 </div>
-                <div class="mb-3">
+                <div class="mb-3 output-section-fixed">
                   <div class="small text-muted mb-1">Docker Output</div>
                   <div v-if="statusOutput" class="output-bar">
                     <pre class="output-bar-pre">{{ statusOutput }}</pre>
                   </div>
                   <div v-else class="text-muted small">No docker output available yet.</div>
                 </div>
-                <div>
+                <div class="output-section-grow">
                   <div class="small text-muted mb-1">Docker Logs</div>
-                  <div v-if="dockerLogs" class="output-bar output-bar-large">
-                    <pre class="output-bar-pre output-bar-pre-large">{{ dockerLogs }}</pre>
+                  <div v-if="dockerLogs" class="output-bar output-bar-large output-bar-fill">
+                    <pre class="output-bar-pre output-bar-pre-large output-bar-pre-fill">{{ dockerLogs }}</pre>
                   </div>
                   <div v-else class="text-muted small">No docker logs available yet.</div>
                 </div>
@@ -1169,7 +1372,11 @@ createApp({
         </main>
       </div>
 
-      <div class="app-footer">
+      <footer class="main-footer">
+        <img class="footer-logo" src="/assets/Logo Broadpeak.svg" alt="Broadpeak logo" />
+      </footer>
+
+      <div class="toast-overlay">
         <transition-group name="toast" tag="div" class="toast-stack">
           <div
             v-for="toast in toasts"

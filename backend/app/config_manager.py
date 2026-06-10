@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,34 @@ REGISTER_VHOST_PATTERN = re.compile(
     r'register_vhost\((?P<var>\w+),\s*"upstream_stitcher",\s*"(?P<upstream>[^"]+)"\);',
 )
 
+PROMETHEUS_PORT_PATTERN = re.compile(
+    r"^\s*config\.prometheus_port\s*=\s*(?P<port>\d+)\s*;",
+    re.MULTILINE,
+)
+
+MONITORING_FLAG_PATTERNS: dict[str, re.Pattern[str]] = {
+    "network_monitoring": re.compile(
+        r"^\s*product\.default_settings\.network_monitoring\.is_enabled\s*=\s*(?P<value>true|false)\s*;",
+        re.MULTILINE,
+    ),
+    "metrics": re.compile(
+        r"^\s*product\.default_settings\.monitoring\.metrics\.is_enabled\s*=\s*(?P<value>true|false)\s*;",
+        re.MULTILINE,
+    ),
+    "storage": re.compile(
+        r"^\s*product\.default_settings\.monitoring\.storage\.is_enabled\s*=\s*(?P<value>true|false)\s*;",
+        re.MULTILINE,
+    ),
+    "services_upstreams_active": re.compile(
+        r"^\s*product\.default_settings\.monitoring\.services_upstreams\.active\.is_enabled\s*=\s*(?P<value>true|false)\s*;",
+        re.MULTILINE,
+    ),
+    "services_upstreams_passive": re.compile(
+        r"^\s*product\.default_settings\.monitoring\.services_upstreams\.passive\.is_enabled\s*=\s*(?P<value>true|false)\s*;",
+        re.MULTILINE,
+    ),
+}
+
 @dataclass
 class UpstreamConfig:
     name: str
@@ -70,6 +99,9 @@ class VhostConfig:
 @dataclass
 class ParsedConfig:
     default_settings: dict[str, str]
+    default_settings_meta: dict[str, dict[str, str]]
+    monitoring_enabled: bool
+    prometheus_port: int
     services: list[dict[str, Any]]
     upstreams: list[UpstreamConfig]
     vhosts: list[VhostConfig]
@@ -84,6 +116,52 @@ def _parse_assignments(block: str) -> dict[str, str]:
         value = match.group(2).strip()
         result[key] = value
     return result
+
+
+def _parse_default_settings_with_meta(
+    block: str,
+) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    defaults: dict[str, str] = {}
+    metadata: dict[str, dict[str, str]] = {}
+
+    pending_meta: dict[str, str] | None = None
+    ui_meta_re = re.compile(r"^//\s*ui_meta\s*:\s*(\{.*\})\s*$")
+    assignment_re = re.compile(r"^\.(\w+)\s*=\s*([^,]+)\s*,?\s*$")
+
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        meta_match = ui_meta_re.match(line)
+        if meta_match:
+            pending_meta = None
+            try:
+                parsed = json.loads(meta_match.group(1))
+                if isinstance(parsed, dict):
+                    label = str(parsed.get("label", "")).strip()
+                    tooltip = str(parsed.get("tooltip", "")).strip()
+                    if label or tooltip:
+                        pending_meta = {
+                            "label": label,
+                            "tooltip": tooltip,
+                        }
+            except Exception:
+                pending_meta = None
+            continue
+
+        assignment_match = assignment_re.match(line)
+        if not assignment_match:
+            continue
+
+        key = assignment_match.group(1).strip()
+        value = assignment_match.group(2).strip()
+        defaults[key] = value
+        if pending_meta:
+            metadata[key] = pending_meta
+            pending_meta = None
+
+    return defaults, metadata
 
 
 def _parse_endpoints(upstream_body: str) -> list[str]:
@@ -163,7 +241,10 @@ def parse_config_text(text: str) -> ParsedConfig:
     default_match = DEFAULT_CONFIG_PATTERN.search(text)
     if not default_match:
         raise ValueError("default_config block not found")
-    default_settings = _parse_assignments(default_match.group("body"))
+    (
+        default_settings,
+        default_settings_meta,
+    ) = _parse_default_settings_with_meta(default_match.group("body"))
 
     services: list[dict[str, Any]] = []
     for service_match in SERVICE_CONFIG_PATTERN.finditer(text):
@@ -180,8 +261,26 @@ def parse_config_text(text: str) -> ParsedConfig:
 
     vhosts = _parse_vhosts(text)
 
+    prometheus_match = PROMETHEUS_PORT_PATTERN.search(text)
+    if not prometheus_match:
+        raise ValueError("config.prometheus_port assignment not found")
+    prometheus_port = int(prometheus_match.group("port"))
+
+    monitoring_values: list[bool] = []
+    for pattern in MONITORING_FLAG_PATTERNS.values():
+        match = pattern.search(text)
+        if not match:
+            raise ValueError("One or more monitoring flags not found")
+        monitoring_values.append(match.group("value") == "true")
+
+    # Keep a deterministic UI state when the file has mixed values.
+    monitoring_enabled = all(monitoring_values)
+
     return ParsedConfig(
         default_settings=default_settings,
+        default_settings_meta=default_settings_meta,
+        monitoring_enabled=monitoring_enabled,
+        prometheus_port=prometheus_port,
         services=services,
         upstreams=upstreams,
         vhosts=vhosts,
@@ -189,13 +288,56 @@ def parse_config_text(text: str) -> ParsedConfig:
     )
 
 
-def _render_defaults_clean(default_settings: dict[str, str]) -> str:
+def _replace_prometheus_port(text: str, prometheus_port: int) -> str:
+    return PROMETHEUS_PORT_PATTERN.sub(
+        lambda match: match.group(0).replace(
+            match.group("port"),
+            str(prometheus_port),
+            1,
+        ),
+        text,
+        count=1,
+    )
+
+
+def _replace_monitoring_flags(text: str, monitoring_enabled: bool) -> str:
+    value = "true" if monitoring_enabled else "false"
+    updated = text
+    for pattern in MONITORING_FLAG_PATTERNS.values():
+        updated = pattern.sub(
+            lambda match: match.group(0).replace(
+                match.group("value"),
+                value,
+                1,
+            ),
+            updated,
+            count=1,
+        )
+    return updated
+
+
+def _render_defaults_clean(
+    default_settings: dict[str, str],
+    default_settings_meta: dict[str, dict[str, str]] | None = None,
+) -> str:
     if not default_settings:
         raise ValueError("default_settings cannot be empty")
 
+    metadata = default_settings_meta or {}
     lines = []
     keys = list(default_settings.keys())
     for idx, key in enumerate(keys):
+        meta_for_key = metadata.get(key, {})
+        label = str(meta_for_key.get("label", "")).strip()
+        tooltip = str(meta_for_key.get("tooltip", "")).strip()
+        if label or tooltip:
+            payload = json.dumps(
+                {"label": label, "tooltip": tooltip},
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            lines.append(f"                // ui_meta: {payload}")
+
         value = str(default_settings[key]).strip()
         if key.startswith("param_"):
             value = _ensure_quoted_literal(value)
@@ -262,10 +404,10 @@ def _render_upstream_block(upstream: UpstreamConfig) -> str:
         '        [](cache::upstream_request& request, cache::upstream_reply& reply) {',
         f'            stitcher::log().debug("{name} after_reply url={{}} Cache-Control={{}} Expires={{}}",',
         '                                  request.get_url(),',
-        '                                  reply.get_header(HTTP_HEADER_CACHE_CONTROL),'
-        ' reply.get_header(HTTP_HEADER_EXPIRES));',
-        '            reply.remove_header(HTTP_HEADER_CACHE_CONTROL);',
-        '            reply.remove_header(HTTP_HEADER_EXPIRES);',
+        '                                  reply.get_header(proxygen::HTTP_HEADER_CACHE_CONTROL),'
+        ' reply.get_header(proxygen::HTTP_HEADER_EXPIRES));',
+        '            reply.remove_header(proxygen::HTTP_HEADER_CACHE_CONTROL);',
+        '            reply.remove_header(proxygen::HTTP_HEADER_EXPIRES);',
         '        },',
         '    .default_expiration_function =',
         f'        {_UPSTREAM_EXPIRATION},',
@@ -330,16 +472,25 @@ _VHOST_SECTION_PATTERN = re.compile(
 def apply_config_updates(
     text: str,
     default_settings: dict[str, str],
+    default_settings_meta: dict[str, dict[str, str]] | None,
+    monitoring_enabled: bool,
+    prometheus_port: int,
     services: list[dict[str, Any]],
     upstreams: list[UpstreamConfig],
     vhosts: list[VhostConfig],
 ) -> str:
+    text = _replace_monitoring_flags(text, monitoring_enabled)
+    text = _replace_prometheus_port(text, prometheus_port)
+
     # --- default_config block ---
     default_match = DEFAULT_CONFIG_PATTERN.search(text)
     if not default_match:
         raise ValueError("default_config block not found")
 
-    default_block = _render_defaults_clean(default_settings)
+    default_block = _render_defaults_clean(
+        default_settings,
+        default_settings_meta,
+    )
     text = (
         text[:default_match.start()]
         + default_block

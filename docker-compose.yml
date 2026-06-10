@@ -11,6 +11,7 @@ services:
     ports:
       - "1080:80"
       - "1443:443"
+      - "11450:11450"
     volumes:
       - ./conf/stitcher.conf.cc:/etc/broadpeak/hpc/stitcher.conf.cc
     tty: true

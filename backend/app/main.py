@@ -72,6 +72,16 @@ class ServiceConfigModel(BaseModel):
     settings: dict[str, str]
 
 
+class DefaultSettingMetaModel(BaseModel):
+    label: str = ""
+    tooltip: str = ""
+
+    @field_validator("label", "tooltip")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        return str(value).strip()
+
+
 class VhostEndpointModel(BaseModel):
     protocol: str
     port: int = Field(ge=1, le=65535)
@@ -115,6 +125,12 @@ class VhostModel(BaseModel):
 
 class ConfigUpdateModel(BaseModel):
     default_settings: dict[str, str]
+    default_settings_meta: dict[
+        str,
+        DefaultSettingMetaModel,
+    ] = Field(default_factory=dict)
+    monitoring_enabled: bool = False
+    prometheus_port: int = Field(default=11450, ge=1, le=65535)
     services: list[ServiceConfigModel]
     upstreams: list[UpstreamModel]
     vhosts: list[VhostModel]
@@ -174,6 +190,17 @@ class ConfigUpdateModel(BaseModel):
             service.name = clean_name
             service.settings = normalized
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_default_settings_meta(self) -> "ConfigUpdateModel":
+        allowed_keys = set(self.default_settings.keys())
+        for key in self.default_settings_meta.keys():
+            if key not in allowed_keys:
+                raise ValueError(
+                    "default_settings_meta key not found in "
+                    f"default_settings: {key}",
+                )
         return self
 
     @model_validator(mode="after")
@@ -408,6 +435,9 @@ def read_config() -> dict[str, Any]:
     parsed = parse_config_text(text)
     return {
         "default_settings": parsed.default_settings,
+        "default_settings_meta": parsed.default_settings_meta,
+        "monitoring_enabled": parsed.monitoring_enabled,
+        "prometheus_port": parsed.prometheus_port,
         "services": parsed.services,
         "upstreams": [
             {"name": u.name, "endpoints": u.endpoints}
@@ -447,6 +477,12 @@ def update_config(payload: ConfigUpdateModel) -> dict[str, Any]:
         updated = apply_config_updates(
             text=current,
             default_settings=payload.default_settings,
+            default_settings_meta={
+                key: value.model_dump()
+                for key, value in payload.default_settings_meta.items()
+            },
+            monitoring_enabled=payload.monitoring_enabled,
+            prometheus_port=payload.prometheus_port,
             services=[s.model_dump() for s in payload.services],
             upstreams=[
                 UpstreamConfig(name=u.name, endpoints=u.endpoints)
