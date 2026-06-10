@@ -38,6 +38,7 @@ createApp({
       configModified: false,
       needsReload: false,
       isLoading: false,
+      loadingConfig: false,
       navBusyLabel: "",
     };
   },
@@ -187,7 +188,7 @@ createApp({
       return targets;
     },
     isNavBusy() {
-      return this.loading || this.saving || this.testingUrl;
+      return this.loading || this.saving || this.testingUrl || this.loadingConfig || this.isLoading;
     },
     navBusyText() {
       return this.navBusyLabel || "PROCESSING";
@@ -582,6 +583,10 @@ createApp({
       });
     },
     async loadConfig() {
+      const setLoadingLabel = !this.navBusyLabel;
+      if (setLoadingLabel) {
+        this.navBusyLabel = "LOADING";
+      }
       this.isLoading = true;
       try {
         const data = await this.api("/api/config");
@@ -593,6 +598,9 @@ createApp({
         this.initializeCodeHighlight();
       } finally {
         this.isLoading = false;
+        if (setLoadingLabel && this.navBusyLabel === "LOADING") {
+          this.navBusyLabel = "";
+        }
       }
     },
     async loadBackups() {
@@ -616,6 +624,8 @@ createApp({
       this.loadConfigModal.hide();
     },
     async loadSelectedConfig() {
+      this.loadingConfig = true;
+      this.navBusyLabel = "LOADING";
       try {
         if (this.selectedLoadTarget === "current") {
           await this.loadConfig();
@@ -631,6 +641,9 @@ createApp({
         this.closeLoadConfigModal();
       } catch (error) {
         this.saveMessage = `Load error: ${String(error.message || error)}`;
+      } finally {
+        this.loadingConfig = false;
+        this.navBusyLabel = "";
       }
     },
     async saveConfig() {
@@ -1475,8 +1488,8 @@ createApp({
               </select>
             </div>
             <div class="modal-footer">
-              <button type="button" class="btn btn-outline-secondary" @click="closeLoadConfigModal">Cancel</button>
-              <button type="button" class="btn btn-primary" @click="loadSelectedConfig">Load</button>
+              <button type="button" class="btn btn-outline-secondary" :disabled="loadingConfig" @click="closeLoadConfigModal">Cancel</button>
+              <button type="button" class="btn btn-primary" :disabled="loadingConfig" @click="loadSelectedConfig">Load</button>
             </div>
           </div>
         </div>
