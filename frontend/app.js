@@ -19,7 +19,7 @@ createApp({
       saveMessage: "",
       toasts: [],
       _toastId: 0,
-      testUrlValue: "http://localhost:1080/bpk-tv/jumping/dvr30sdefault/index.mpd",
+      testUrlValue: "http://192.9.80.52:1080/bpk-tv/ARTE/default/index.mpd",
       testResult: null,
       config: {
         default_settings: [],
@@ -730,17 +730,7 @@ createApp({
       if (!targetUrl) {
         return;
       }
-      try {
-        const payload = JSON.stringify({
-          src: targetUrl,
-          autoplay: true,
-          ts: Date.now(),
-        });
-        globalThis.localStorage.setItem("stitcher_player_request", payload);
-      } catch (error) {
-        globalThis.console.warn("Unable to persist player request", error);
-      }
-      globalThis.open(`/player.html?src=${encodeURIComponent(targetUrl)}&autoplay=1`, "_blank", "noopener,noreferrer");
+      globalThis.open(`http://reference.dashif.org/dash.js/latest/samples/dash-if-reference-player/index.html?autoplay=true&stream=${encodeURIComponent(targetUrl)}`, "_blank", "noopener,noreferrer");
     },
   },
   async mounted() {

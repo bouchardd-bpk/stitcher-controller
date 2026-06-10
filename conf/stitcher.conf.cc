@@ -10,11 +10,11 @@ using namespace stitcher_conf;
 init_stitcher(product, "upstream_stitcher");
 
 /* === product settings =================== */
-product.default_settings.network_monitoring.is_enabled = true;
-product.default_settings.monitoring.metrics.is_enabled = true;
-product.default_settings.monitoring.storage.is_enabled = true;
-product.default_settings.monitoring.services_upstreams.active.is_enabled = true;
-product.default_settings.monitoring.services_upstreams.passive.is_enabled = true;
+product.default_settings.network_monitoring.is_enabled = false;
+product.default_settings.monitoring.metrics.is_enabled = false;
+product.default_settings.monitoring.storage.is_enabled = false;
+product.default_settings.monitoring.services_upstreams.active.is_enabled = false;
+product.default_settings.monitoring.services_upstreams.passive.is_enabled = false;
 
 product.default_settings.req_logs_config.txt_config = {
     .is_activated = true,
@@ -48,8 +48,9 @@ default_config({
                 // ui_meta: {"label":"Manifest expiration","tooltip":"Validity/cache duration for generated manifests (example: 1s)."}
                 .manifest_expiration = 1s
 });
-service_config("jumping", {.init_dvrwindow = 600s, .incr_dvrwindow = 15s, .session_expiration = 10s});
-service_config("service1hour", {.init_dvrwindow = 1h, .incr_dvrwindow = 60s});
+service_config("ARTE", {.init_dvrwindow = 600s, .incr_dvrwindow = 15s});
+
+
 
 
 
@@ -77,7 +78,7 @@ config.upstreams["upstream_origin"] = {
         },
     .default_expiration_function =
         hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
-    .endpoints = {"https://origin.ridgeline.fr"},
+    .endpoints = {"http://197.30.248.202"},
 };
 
 config.upstreams["upstream_qos"] = {
@@ -96,21 +97,7 @@ config.upstreams["upstream_qos"] = {
     .endpoints = {"http://qos.example.com"},
 };
 
-config.upstreams["upstream_test2"] = {
-    .max_redirect = 10,
-    .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_test2 before_request url={}", request.get_url()); },
-    .after_reply =
-        [](cache::upstream_request& request, cache::upstream_reply& reply) {
-            stitcher::log().debug("upstream_test2 after_reply url={} Cache-Control={} Expires={}",
-                                  request.get_url(),
-                                  reply.get_header(proxygen::HTTP_HEADER_CACHE_CONTROL), reply.get_header(proxygen::HTTP_HEADER_EXPIRES));
-            reply.remove_header(proxygen::HTTP_HEADER_CACHE_CONTROL);
-            reply.remove_header(proxygen::HTTP_HEADER_EXPIRES);
-        },
-    .default_expiration_function =
-        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
-    .endpoints = {"http://197.30.248.202"},
-};
+
 
 
 
@@ -122,8 +109,8 @@ config.upstreams["upstream_test2"] = {
 
 auto& upstream_stitcher_conf = config.upstreams["upstream_stitcher"];
 upstream_stitcher_conf.after_reply = [](const cache::upstream_request&, cache::upstream_reply& reply) {
-    reply.remove_header(proxygen::proxygen::HTTP_HEADER_CACHE_CONTROL);
-    reply.remove_header(proxygen::proxygen::HTTP_HEADER_EXPIRES);
+    reply.remove_header(proxygen::HTTP_HEADER_CACHE_CONTROL);
+    reply.remove_header(proxygen::HTTP_HEADER_EXPIRES);
 };
 
 /* === WEB server listening port =========== */
@@ -143,6 +130,6 @@ register_vhost(vh_qos, "upstream_stitcher", "upstream_qos");
 
 /* === Initialize request_callback function to remove cache disabling headers === */
 request_callback() = [](cache::client_request& request) {
-    request.remove_header(proxygen::proxygen::HTTP_HEADER_CACHE_CONTROL);
-    request.remove_header(proxygen::proxygen::HTTP_HEADER_PRAGMA);
+    request.remove_header(proxygen::HTTP_HEADER_CACHE_CONTROL);
+    request.remove_header(proxygen::HTTP_HEADER_PRAGMA);
 };
