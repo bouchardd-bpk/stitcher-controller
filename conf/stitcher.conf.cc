@@ -49,20 +49,7 @@ default_config({
                 .manifest_expiration = 1s
 });
 service_config("ARTE", {.init_dvrwindow = 600s, .incr_dvrwindow = 15s});
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+service_config("7ANS", {.init_dvrwindow = 360s});
 
 /* === UPSTREAM ORIGIN ===================== */
 config.upstreams["upstream_origin"] = {
@@ -96,16 +83,6 @@ config.upstreams["upstream_qos"] = {
         hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
     .endpoints = {"http://qos.example.com"},
 };
-
-
-
-
-
-
-
-
-
-
 
 auto& upstream_stitcher_conf = config.upstreams["upstream_stitcher"];
 upstream_stitcher_conf.after_reply = [](const cache::upstream_request&, cache::upstream_reply& reply) {

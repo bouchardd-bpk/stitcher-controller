@@ -21,6 +21,7 @@ createApp({
       _toastId: 0,
       testUrlValue: "http://192.9.80.52:1080/bpk-tv/ARTE/default/index.mpd",
       testResult: null,
+      rawConfigText: "",
       config: {
         default_settings: [],
         monitoring_enabled: false,
@@ -199,6 +200,7 @@ createApp({
     },
     activePanel() {
       this.initializeTooltips();
+      this.initializeCodeHighlight();
     },
   },
   methods: {
@@ -544,10 +546,25 @@ createApp({
         });
       });
     },
+    initializeCodeHighlight() {
+      this.$nextTick(() => {
+        if (!globalThis.hljs) {
+          return;
+        }
+        document.querySelectorAll(".config-source-pre code").forEach((el) => {
+          el.innerHTML = el.textContent;
+          delete el.dataset.highlighted;
+          el.classList.remove("hljs");
+          globalThis.hljs.highlightElement(el);
+        });
+      });
+    },
     async loadConfig() {
       const data = await this.api("/api/config");
       this.normalizeConfig(data);
+      this.rawConfigText = String(data.raw || "");
       this.initializeTooltips();
+      this.initializeCodeHighlight();
     },
     async loadBackups() {
       const data = await this.api("/api/backups");
@@ -676,9 +693,10 @@ createApp({
           method: "PUT",
           body: JSON.stringify(payload),
         });
+        await this.loadConfig();
+        await this.loadBackups();
         this.saveMessage = `Saved. Backup: ${data.backup}`;
         this.showToast(`Saved. Backup: ${data.backup}`, "success");
-        await this.loadBackups();
       } catch (error) {
         this.saveMessage = `Error: ${String(error.message || error)}`;
         this.showToast(`Save error: ${String(error.message || error).slice(0, 80)}`, "danger");
@@ -854,6 +872,14 @@ createApp({
           </button>
           <button
             class="sidebar-btn"
+            :class="{ active: activePanel === 'config-source' }"
+            @click="activePanel = 'config-source'"
+            title="Configuration File"
+          >
+            <i class="bi bi-file-earmark-code"></i>
+          </button>
+          <button
+            class="sidebar-btn"
             :class="{ active: activePanel === 'tester' }"
             @click="activePanel = 'tester'"
             title="URL Tester"
@@ -977,6 +1003,20 @@ createApp({
                       </div>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="activePanel === 'config-source'" class="panel-area panel-area-config-source">
+            <div class="card panel-card panel-card-config-source">
+              <div class="card-body card-body-config-source">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                  <h6 class="card-title mb-0">stitcher.conf.cc</h6>
+                  <span class="small text-muted">Formatted source view</span>
+                </div>
+                <div class="config-source-shell">
+                  <pre class="config-source-pre"><code class="language-cpp">{{ rawConfigText }}</code></pre>
                 </div>
               </div>
             </div>

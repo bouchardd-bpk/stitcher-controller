@@ -390,6 +390,8 @@ _UPSTREAM_SECTION_COMMENT_RE = re.compile(
     r'(?:/\* === UPSTREAM ORIGIN ===================== \*/\n)+',
 )
 
+_MULTI_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
 
 def _render_upstream_block(upstream: UpstreamConfig) -> str:
     name = upstream.name
@@ -458,6 +460,11 @@ def _render_vhosts_section(
         for v in vhosts
     )
     return blocks + '\n\n/* === Register handlers on vhosts ========== */\n\n' + register_lines
+
+
+def _collapse_blank_lines(text: str) -> str:
+    collapsed = _MULTI_BLANK_LINES_RE.sub("\n\n", text)
+    return collapsed.rstrip() + "\n"
 
 
 # Pattern for the entire vhost + register_vhost section to replace atomically
@@ -556,7 +563,7 @@ def apply_config_updates(
                 + text[vhost_section_match.end():]
             )
 
-    return text
+    return _collapse_blank_lines(text)
 
 
 def make_backup(config_path: Path, backup_dir: Path) -> Path:

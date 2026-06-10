@@ -359,12 +359,29 @@ body {
   min-height: 0;
 }
 
+.panel-area-config-source {
+  flex: 1;
+  min-height: 0;
+}
+
 .panel-card-output {
   flex: 1;
   min-height: 0;
 }
 
+.panel-card-config-source {
+  flex: 1;
+  min-height: 0;
+}
+
 .card-body-output {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-body-config-source {
   height: 100%;
   min-height: 0;
   display: flex;
@@ -391,6 +408,41 @@ body {
 .output-bar-pre-fill {
   flex: 1;
   max-height: none;
+}
+
+.config-source-shell {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid #dbe7dc;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f6faf7;
+}
+
+.config-source-inline {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.config-source-pre {
+  margin: 0;
+  height: 100%;
+  max-height: none;
+  overflow: auto;
+  padding: 1rem 1.1rem;
+  background: #f6faf7;
+}
+
+.config-source-pre code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.config-source-pre code.hljs {
+  padding: 0;
+  background: transparent;
 }
 
 .panel-card {
