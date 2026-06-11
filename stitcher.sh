@@ -358,18 +358,29 @@ init() {
   mkdir -p "$(dirname "$CONF_PATH")"
   local abs_conf_path
   abs_conf_path="$(pwd)/conf/$CONF_FILE"
-  # Verify from inside the container that config exists and is not empty,
-  # then stream it to host to avoid CLI cp permission issues.
-  if ! $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "test -s /etc/broadpeak/hpc/$CONF_FILE && cat /etc/broadpeak/hpc/$CONF_FILE" > "$abs_conf_path"; then
-    echo "❌ Failed to fetch configuration from container (exec/cat failed)."
+  local tmp_conf_path
+  tmp_conf_path="$(mktemp "$(pwd)/conf/.${CONF_FILE}.tmp.XXXXXX")"
+  local fetch_ok=0
+  local fetch_attempt=1
+  while [ "$fetch_attempt" -le 10 ]; do
+    if $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2>/dev/null && [ -s "$tmp_conf_path" ]; then
+      fetch_ok=1
+      break
+    fi
+
+    echo "⚠️  Fetch attempt $fetch_attempt/10 failed. Retrying in 5s..."
+    sleep 5
+    fetch_attempt=$((fetch_attempt + 1))
+  done
+
+  if [ "$fetch_ok" -ne 1 ]; then
+    rm -f "$tmp_conf_path" >/dev/null 2>&1 || true
+    echo "❌ Failed to fetch configuration from container after 10 attempts."
     $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
   fi
-  if [ ! -s "$abs_conf_path" ]; then
-    echo "❌ Configuration file was fetched but is empty."
-    $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-    exit 1
-  fi
+
+  mv "$tmp_conf_path" "$abs_conf_path"
   ensure_conf_file_permissions
 
   echo ">> Stopping initial container..."
