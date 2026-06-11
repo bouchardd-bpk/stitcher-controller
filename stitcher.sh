@@ -342,14 +342,18 @@ init() {
 
   echo ">> Fetching configuration file..."
   mkdir -p "$(dirname "$CONF_PATH")"
-  local conf_content
-  conf_content=$($CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" 2>/dev/null || true)
-  if [ -z "$conf_content" ]; then
-    echo "❌ Failed to fetch configuration from container (file empty or missing)."
+  local abs_conf_path
+  abs_conf_path="$(pwd)/conf/$CONF_FILE"
+  if ! $CONTAINER_CLI cp "$CONTAINER_NAME:/etc/broadpeak/hpc/$CONF_FILE" "$abs_conf_path"; then
+    echo "❌ Failed to copy configuration from container."
     $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
   fi
-  printf '%s' "$conf_content" > "$CONF_PATH"
+  if [ ! -s "$abs_conf_path" ]; then
+    echo "❌ Configuration file was copied but is empty."
+    $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    exit 1
+  fi
 
   echo ">> Stopping initial container..."
   $CONTAINER_CLI stop $CONTAINER_NAME
