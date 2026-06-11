@@ -336,15 +336,20 @@ init() {
   $CONTAINER_CLI run -d -t $DOCKER_COMMON \
     --name $CONTAINER_NAME $IMAGE
 
-  echo ">> Waiting for startup..."
-  sleep 5
+  # Set mode explicitly so wait_stitcher_ready works correctly
+  STITCHER_MODE="container"
+  wait_stitcher_ready
 
   echo ">> Fetching configuration file..."
   mkdir -p "$(dirname "$CONF_PATH")"
-  if ! $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" > "$CONF_PATH"; then
-    echo "❌ Failed to fetch configuration from container."
+  local conf_content
+  conf_content=$($CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" 2>/dev/null || true)
+  if [ -z "$conf_content" ]; then
+    echo "❌ Failed to fetch configuration from container (file empty or missing)."
+    $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
   fi
+  printf '%s' "$conf_content" > "$CONF_PATH"
 
   echo ">> Stopping initial container..."
   $CONTAINER_CLI stop $CONTAINER_NAME
