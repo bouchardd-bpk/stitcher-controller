@@ -336,9 +336,15 @@ init() {
   $CONTAINER_CLI run -d -t $DOCKER_COMMON \
     --name $CONTAINER_NAME $IMAGE
 
-  # Set mode explicitly so wait_stitcher_ready works correctly
-  STITCHER_MODE="container"
-  wait_stitcher_ready
+  echo ">> Waiting for container to be ready..."
+  local attempt=1
+  while [ "$attempt" -le 20 ]; do
+    if $CONTAINER_CLI exec "$CONTAINER_NAME" true 2>/dev/null; then
+      break
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
 
   echo ">> Fetching configuration file..."
   mkdir -p "$(dirname "$CONF_PATH")"
