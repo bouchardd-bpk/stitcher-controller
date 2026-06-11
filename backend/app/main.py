@@ -30,6 +30,179 @@ BACKUP_DIR = ROOT_DIR / "conf" / "backups"
 STITCHER_SCRIPT = ROOT_DIR / "stitcher.sh"
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
+# Container CLI detection (supports docker, podman, nerdctl, bpk-nerdctl)
+CONTAINER_CLI_CACHE: str | None = None
+
+
+def detect_container_cli() -> str:
+    """
+    Detect which container CLI is available.
+    Tries in order: bpk-nerdctl, nerdctl, podman, docker
+    Returns the CLI name (e.g., "docker", "podman", "nerdctl", "bpk-nerdctl")
+    Raises RuntimeError if no CLI is found.
+    """
+    for cli in ["bpk-nerdctl", "nerdctl", "podman", "docker"]:
+        result = subprocess.run(
+            f"command -v {cli}",
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return cli
+
+    raise RuntimeError(
+        "No container CLI found (docker, podman, nerdctl, "
+        "or bpk-nerdctl required)"
+    )
+
+
+def get_container_cli() -> str:
+    """Get the detected container CLI (with caching)."""
+    global CONTAINER_CLI_CACHE
+    if CONTAINER_CLI_CACHE is None:
+        CONTAINER_CLI_CACHE = detect_container_cli()
+    return CONTAINER_CLI_CACHE
+
+
+# Mode detection for Stitcher (container vs native)
+STITCHER_MODE_CACHE: dict[str, str] = {"mode": "unknown", "checked_at": ""}
+
+
+def detect_stitcher_mode() -> str:
+    """
+    Detect if Stitcher is running in container mode or native (RPM) mode.
+    Returns: "container", "native", or "unknown"
+    """
+    try:
+        cli = get_container_cli()
+    except RuntimeError:
+        # No container CLI available, must be native
+        if Path("/etc/broadpeak/hpc/stitcher.conf.cc").exists():
+            return "native"
+        return "unknown"
+
+    # Check if container is running
+    result = subprocess.run(
+        [cli, "ps", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and "stitcher" in result.stdout:
+        return "container"
+
+    # Check if stitcher-hpc RPM is installed
+    result = subprocess.run(
+        ["rpm", "-q", "stitcher-hpc"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return "native"
+
+    # Check if native config file exists
+    if Path("/etc/broadpeak/hpc/stitcher.conf.cc").exists():
+        return "native"
+
+    # Default unknown
+    return "unknown"
+
+
+def get_stitcher_mode() -> str:
+    """Get cached mode or detect it."""
+    return detect_stitcher_mode()
+
+
+def run_stitcher_command(action: str) -> dict[str, Any]:
+    """
+    Execute stitcher control command via the appropriate method.
+    action: "start", "stop", "reload", "status", or "init"
+    Returns dict with ok, returncode, and output.
+    """
+    mode = get_stitcher_mode()
+
+    if mode == "native":
+        # Use systemctl for native mode
+        cmd_map = {
+            "start": ["sudo", "systemctl", "start", "stitcher-hpc"],
+            "stop": ["sudo", "systemctl", "stop", "stitcher-hpc"],
+            "reload": [
+                "sudo",
+                "systemctl",
+                "reload-or-restart",
+                "stitcher-hpc",
+            ],
+            "status": ["systemctl", "status", "stitcher-hpc", "--no-pager"],
+            # Init has no meaning in native mode - it's already installed
+            "init": ["echo", "Native mode: stitcher-hpc is already installed"],
+        }
+    else:
+        # Use stitcher.sh for container mode
+        cmd_map = {
+            "start": [str(STITCHER_SCRIPT), "start"],
+            "stop": [str(STITCHER_SCRIPT), "stop"],
+            "reload": [str(STITCHER_SCRIPT), "reload"],
+            "status": [str(STITCHER_SCRIPT), "status"],
+            "init": [str(STITCHER_SCRIPT), "init"],
+        }
+
+    if action not in cmd_map:
+        raise ValueError(f"Unknown action: {action}")
+
+    cmd = cmd_map[action]
+    result = subprocess.run(
+        cmd,
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Return dict format expected by endpoints
+    return {
+        "ok": result.returncode == 0,
+        "returncode": result.returncode,
+        "output": result.stdout + result.stderr,
+    }
+
+
+def stitcher_running() -> bool:
+    """Check if Stitcher is currently running."""
+    mode = get_stitcher_mode()
+
+    if mode == "native":
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "stitcher-hpc"],
+            check=False,
+        )
+        return result.returncode == 0
+    elif mode == "container":
+        try:
+            cli = get_container_cli()
+            result = subprocess.run(
+                [cli, "ps", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.returncode == 0 and "stitcher" in result.stdout
+        except RuntimeError:
+            return False
+    else:
+        return False
+
+
+def get_config_path() -> Path:
+    """Get the configuration path based on Stitcher mode."""
+    mode = get_stitcher_mode()
+    if mode == "native":
+        return Path("/etc/broadpeak/hpc/stitcher.conf.cc")
+    else:
+        return CONF_PATH
+
 
 RESERVED_UPSTREAM_NAMES = {"upstream_stitcher"}
 
@@ -254,6 +427,17 @@ MANIFEST_EXTENSIONS = (
 )
 
 
+def _command_exists(name: str) -> bool:
+    probe = subprocess.run(
+        ["bash", "-lc", f"command -v {name}"],
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return probe.returncode == 0
+
+
 def clean_terminal_output(text: str) -> str:
     # Remove ANSI sequences and normalize terminal control characters.
     cleaned = ANSI_ESCAPE_RE.sub("", text)
@@ -323,56 +507,22 @@ def parse_traffic_event(raw_line: str) -> dict[str, Any] | None:
     }
 
 
-def run_stitcher_command(command: str) -> dict[str, Any]:
-    if not STITCHER_SCRIPT.exists():
-        raise HTTPException(status_code=500, detail="stitcher.sh not found")
-
-    try:
-        proc = subprocess.run(
-            ["bash", str(STITCHER_SCRIPT), command],
-            cwd=str(ROOT_DIR),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Command error: {exc}",
-        ) from exc
-
-    return {
-        "command": command,
-        "returncode": proc.returncode,
-        "stdout": clean_terminal_output(proc.stdout),
-        "stderr": clean_terminal_output(proc.stderr),
-        "ok": proc.returncode == 0,
-    }
-
-
-def stitcher_running() -> bool:
-    proc = subprocess.run(
-        [
-            "docker",
-            "ps",
-            "--filter",
-            "name=^/stitcher$",
-            "--format",
-            "{{.Names}}",
-        ],
-        cwd=str(ROOT_DIR),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return "stitcher" in proc.stdout.splitlines()
-
-
 @app.get("/api/container-stats")
 def get_container_stats() -> dict[str, Any]:
+    try:
+        cli = get_container_cli()
+    except RuntimeError as e:
+        return {
+            "name": "stitcher",
+            "cpu": "--",
+            "memory": "--",
+            "memory_percent": "--",
+            "error": str(e),
+        }
+
     proc = subprocess.run(
         [
-            "docker",
+            cli,
             "stats",
             "stitcher",
             "--no-stream",
@@ -427,6 +577,14 @@ def get_container_stats() -> dict[str, Any]:
     }
 
 
+@app.get("/api/stitcher-mode")
+def get_stitcher_mode_endpoint() -> dict[str, Any]:
+    """Get the current Stitcher mode (container or native)."""
+    return {
+        "mode": get_stitcher_mode(),
+    }
+
+
 @app.get("/api/status")
 def get_status() -> dict[str, Any]:
     status_result = run_stitcher_command("status")
@@ -439,7 +597,7 @@ def get_status() -> dict[str, Any]:
 @app.get("/api/config-ready")
 def is_config_ready() -> dict[str, Any]:
     return {
-        "ready": CONF_PATH.exists(),
+        "ready": get_config_path().exists(),
     }
 
 
@@ -475,12 +633,13 @@ def control_stitcher(action: str) -> dict[str, Any]:
 
 @app.get("/api/config")
 def read_config() -> dict[str, Any]:
-    if not CONF_PATH.exists():
+    conf_path = get_config_path()
+    if not conf_path.exists():
         raise HTTPException(
             status_code=404,
             detail="Configuration file not found",
         )
-    text = CONF_PATH.read_text(encoding="utf-8")
+    text = conf_path.read_text(encoding="utf-8")
     parsed = parse_config_text(text)
     return {
         "default_settings": parsed.default_settings,
@@ -513,14 +672,15 @@ def read_config() -> dict[str, Any]:
 
 @app.put("/api/config")
 def update_config(payload: ConfigUpdateModel) -> dict[str, Any]:
-    if not CONF_PATH.exists():
+    conf_path = get_config_path()
+    if not conf_path.exists():
         raise HTTPException(
             status_code=404,
             detail="Configuration file not found",
         )
 
-    current = CONF_PATH.read_text(encoding="utf-8")
-    backup = make_backup(CONF_PATH, BACKUP_DIR)
+    current = conf_path.read_text(encoding="utf-8")
+    backup = make_backup(conf_path, BACKUP_DIR)
 
     try:
         updated = apply_config_updates(
@@ -553,7 +713,7 @@ def update_config(payload: ConfigUpdateModel) -> dict[str, Any]:
                 for v in payload.vhosts
             ],
         )
-        CONF_PATH.write_text(updated, encoding="utf-8")
+        conf_path.write_text(updated, encoding="utf-8")
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -582,8 +742,9 @@ def restore_backup(backup_name: str) -> dict[str, Any]:
     backup_path = BACKUP_DIR / backup_name
     if not backup_path.exists():
         raise HTTPException(status_code=404, detail="Backup not found")
-    make_backup(CONF_PATH, BACKUP_DIR)
-    CONF_PATH.write_text(
+    conf_path = get_config_path()
+    make_backup(conf_path, BACKUP_DIR)
+    conf_path.write_text(
         backup_path.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
@@ -634,8 +795,17 @@ def test_url(payload: UrlTestModel) -> dict[str, Any]:
 @app.get("/api/docker-logs")
 def get_docker_logs(tail: int = 300) -> dict[str, Any]:
     safe_tail = max(1, min(tail, 2000))
+    try:
+        cli = get_container_cli()
+    except RuntimeError:
+        return {
+            "ok": False,
+            "tail": safe_tail,
+            "logs": "No container CLI available.",
+        }
+
     proc = subprocess.run(
-        ["docker", "logs", "--tail", str(safe_tail), "stitcher"],
+        [cli, "logs", "--tail", str(safe_tail), "stitcher"],
         cwd=str(ROOT_DIR),
         capture_output=True,
         text=True,
@@ -646,7 +816,7 @@ def get_docker_logs(tail: int = 300) -> dict[str, Any]:
     output = clean_terminal_output(output)
     if proc.returncode != 0 and not output:
         output = (
-            "Unable to read Docker logs "
+            "Unable to read container logs "
             "(container may be stopped or missing)."
         )
 

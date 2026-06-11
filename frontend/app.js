@@ -13,18 +13,9 @@ createApp({
       configReady: true,
       statusOutput: "",
       dockerLogs: "",
-      originTraffic: [],
-      originTrafficSummary: {
-        before_request: 0,
-        after_reply: 0,
-        manifest: 0,
-      },
-      loadingTraffic: false,
-      trafficError: "",
-      trafficHostFilter: "",
-      trafficTail: 1200,
-      trafficManifestOnly: false,
+      stitcherMode: "unknown",
       containerStats: null,
+      nativeServiceStatus: "",
       statsHistory: [],
       loadingOutput: false,
       saveMessage: "",
@@ -228,8 +219,10 @@ createApp({
     activePanel(newPanel) {
       this.initializeTooltips();
       this.initializeCodeHighlight();
-      if (newPanel === "traffic" && this.originTraffic.length === 0 && !this.loadingTraffic) {
-        this.loadOriginTraffic();
+      if (newPanel === "traffic") {
+        this.loadOriginUpstreams();
+        this.refreshCaptureStatus();
+        this.loadCaptureLogs();
       }
     },
   },
@@ -423,7 +416,15 @@ createApp({
       try {
         const data = await this.api("/api/status");
         this.statusRunning = data.running;
-        this.statusOutput = `${data.status.stdout || ""}${data.status.stderr || ""}`.trim();
+        // Both modes use the output field
+        const statusText = data.status.output || data.status.stdout || data.status.stderr || "";
+        this.statusOutput = statusText.trim();
+        // In native mode, also store in nativeServiceStatus
+        if (this.stitcherMode === "native") {
+          this.nativeServiceStatus = this.statusOutput;
+        } else {
+          this.nativeServiceStatus = "";
+        }
       } catch (error) {
         this.statusOutput = String(error.message || error);
       }
@@ -445,28 +446,13 @@ createApp({
         this.dockerLogs = String(error.message || error);
       }
     },
-    async loadOriginTraffic() {
-      this.loadingTraffic = true;
-      this.trafficError = "";
+    async loadSitcherMode() {
       try {
-        const params = new URLSearchParams();
-        params.set("tail", String(this.trafficTail || 1200));
-        if (this.trafficHostFilter.trim()) {
-          params.set("origin_host", this.trafficHostFilter.trim());
-        }
-        params.set("manifest_only", this.trafficManifestOnly ? "true" : "false");
-        const data = await this.api(`/api/origin-traffic?${params.toString()}`);
-        this.originTraffic = Array.isArray(data.events) ? data.events : [];
-        this.originTrafficSummary = data.summary || {
-          before_request: 0,
-          after_reply: 0,
-          manifest: 0,
-        };
+        const data = await this.api("/api/stitcher-mode");
+        this.stitcherMode = String(data.mode || "unknown");
       } catch (error) {
-        this.trafficError = String(error.message || error);
-        this.originTraffic = [];
-      } finally {
-        this.loadingTraffic = false;
+        console.warn("Could not load Stitcher mode:", error);
+        this.stitcherMode = "unknown";
       }
     },
     async loadContainerStats() {
@@ -525,7 +511,12 @@ createApp({
     async refreshOutputPanel() {
       this.loadingOutput = true;
       try {
-        await Promise.all([this.loadStatus(), this.loadDockerLogs(), this.loadContainerStats()]);
+        const tasks = [this.loadStatus(), this.loadDockerLogs()];
+        // Load container stats only in container mode
+        if (this.stitcherMode === "container") {
+          tasks.push(this.loadContainerStats());
+        }
+        await Promise.all(tasks);
       } finally {
         this.loadingOutput = false;
       }
@@ -838,10 +829,10 @@ createApp({
   },
   async mounted() {
     await this.checkConfigReady();
+    await this.loadSitcherMode();
     await this.loadStatus();
     await this.loadDockerLogs();
     await this.loadContainerStats();
-    await this.loadOriginTraffic();
     await this.loadConfig();
     await this.loadBackups();
     this.loadConfigModal = new globalThis.bootstrap.Modal(this.$refs.loadConfigModal);
@@ -854,8 +845,6 @@ createApp({
       if (!document.hidden && !this.loadingOutput) {
         if (this.activePanel === "output") {
           this.refreshOutputPanel();
-        } else if (this.activePanel === "traffic" && !this.loadingTraffic) {
-          this.loadOriginTraffic();
         }
       }
     }, 10000);
@@ -986,14 +975,6 @@ createApp({
             title="Output"
           >
             <i class="bi bi-terminal-fill"></i>
-          </button>
-          <button
-            class="sidebar-btn"
-            :class="{ active: activePanel === 'traffic' }"
-            @click="activePanel = 'traffic'"
-            title="Origin Traffic"
-          >
-            <i class="bi bi-activity"></i>
           </button>
         </aside>
 
@@ -1460,7 +1441,16 @@ createApp({
           <div v-else-if="activePanel === 'output'" class="panel-area panel-area-output">
             <div class="card panel-card panel-card-output">
               <div class="card-body card-body-output">
+                <!-- Mode indicator -->
                 <div class="mb-3 output-section-fixed">
+                  <div class="small text-muted mb-1">Stitcher Mode</div>
+                  <div class="badge" :class="stitcherMode === 'container' ? 'text-bg-light text-dark border' : 'text-bg-warning'">
+                    {{ stitcherMode === 'container' ? '🐳 Container (Docker)' : stitcherMode === 'native' ? '🖥️ Native (RPM/SystemD)' : '❓ Unknown' }}
+                  </div>
+                </div>
+
+                <!-- Container-specific resources -->
+                <div v-if="stitcherMode === 'container'" class="mb-3 output-section-fixed">
                   <div class="small text-muted mb-1">Container Resources</div>
                   <div class="stats-grid" v-if="containerStats">
                     <div class="stats-tile">
@@ -1484,95 +1474,33 @@ createApp({
                     {{ containerStats.error }}
                   </div>
                 </div>
-                <div class="mb-3 output-section-fixed">
-                  <div class="small text-muted mb-1">Docker Output</div>
-                  <div v-if="statusOutput" class="output-bar">
-                    <pre class="output-bar-pre">{{ statusOutput }}</pre>
+
+                <!-- Native-specific service status -->
+                <div v-if="stitcherMode === 'native'" class="mb-3 output-section-fixed">
+                  <div class="small text-muted mb-1">Service Status</div>
+                  <div v-if="nativeServiceStatus" class="output-bar">
+                    <pre class="output-bar-pre" style="font-size: 0.85rem;">{{ nativeServiceStatus }}</pre>
                   </div>
-                  <div v-else class="text-muted small">No docker output available yet.</div>
+                  <div v-else class="text-muted small">Service status not available.</div>
                 </div>
-                <div class="output-section-grow">
-                  <div class="small text-muted mb-1">Docker Logs</div>
+
+                <!-- Status output (both modes) -->
+                <div class="mb-3 output-section-fixed">
+                  <div class="small text-muted mb-1">{{ stitcherMode === 'container' ? 'Docker' : 'Service' }} Status</div>
+                  <div v-if="statusOutput" class="output-bar">
+                    <pre class="output-bar-pre" style="font-size: 0.85rem;">{{ statusOutput }}</pre>
+                  </div>
+                  <div v-else class="text-muted small">No status output available yet.</div>
+                </div>
+
+                <!-- Container logs (container mode only) -->
+                <div v-if="stitcherMode === 'container'" class="output-section-grow">
+                  <div class="small text-muted mb-1">Container Logs</div>
                   <div v-if="dockerLogs" class="output-bar output-bar-large output-bar-fill">
                     <pre class="output-bar-pre output-bar-pre-large output-bar-pre-fill">{{ dockerLogs }}</pre>
                   </div>
-                  <div v-else class="text-muted small">No docker logs available yet.</div>
+                  <div v-else class="text-muted small">No container logs available yet.</div>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-else-if="activePanel === 'traffic'" class="panel-area panel-area-output">
-            <div class="card panel-card panel-card-output">
-              <div class="card-body card-body-output">
-                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3 output-section-fixed">
-                  <h6 class="card-title mb-0">Origin Traffic</h6>
-                  <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <input
-                      class="form-control form-control-sm"
-                      style="width: 190px;"
-                      v-model="trafficHostFilter"
-                      placeholder="Origin host"
-                    />
-                    <div class="form-check form-check-inline mb-0">
-                      <input
-                        id="traffic-manifest-only"
-                        class="form-check-input"
-                        type="checkbox"
-                        v-model="trafficManifestOnly"
-                      />
-                      <label class="form-check-label small" for="traffic-manifest-only">Manifest only</label>
-                    </div>
-                    <button class="btn btn-outline-primary btn-sm" :disabled="loadingTraffic" @click="loadOriginTraffic">
-                      <i class="bi bi-arrow-repeat me-1"></i>Refresh
-                    </button>
-                  </div>
-                </div>
-
-                <div class="stats-grid mb-3 output-section-fixed">
-                  <div class="stats-tile">
-                    <div class="stats-label">Before Request</div>
-                    <div class="stats-value">{{ originTrafficSummary.before_request || 0 }}</div>
-                  </div>
-                  <div class="stats-tile">
-                    <div class="stats-label">After Reply</div>
-                    <div class="stats-value">{{ originTrafficSummary.after_reply || 0 }}</div>
-                  </div>
-                  <div class="stats-tile">
-                    <div class="stats-label">Manifest</div>
-                    <div class="stats-value">{{ originTrafficSummary.manifest || 0 }}</div>
-                  </div>
-                  <div class="stats-tile">
-                    <div class="stats-label">Events</div>
-                    <div class="stats-value">{{ originTraffic.length }}</div>
-                  </div>
-                </div>
-
-                <div v-if="trafficError" class="text-danger small mb-2 output-section-fixed">{{ trafficError }}</div>
-
-                <div v-if="originTraffic.length" class="traffic-table-wrap output-section-grow">
-                  <table class="traffic-table">
-                    <thead>
-                      <tr>
-                        <th>Upstream</th>
-                        <th>Phase</th>
-                        <th>URL</th>
-                        <th>Cache-Control</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(event, index) in originTraffic" :key="event.url + '-' + index">
-                        <td class="traffic-cell-upstream">{{ event.upstream }}</td>
-                        <td>
-                          <span class="badge" :class="event.phase === 'before_request' ? 'text-bg-primary' : 'text-bg-success'">{{ event.phase }}</span>
-                        </td>
-                        <td class="traffic-cell-url">{{ event.url }}</td>
-                        <td class="traffic-cell-cache">{{ event.cache_control || '-' }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div v-else class="text-muted small">No matching traffic event found in current Docker logs.</div>
               </div>
             </div>
           </div>

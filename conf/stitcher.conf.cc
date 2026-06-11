@@ -48,8 +48,9 @@ default_config({
                 // ui_meta: {"label":"Manifest expiration","tooltip":"Validity/cache duration for generated manifests (example: 1s)."}
                 .manifest_expiration = 1s
 });
-service_config("ARTE", {.init_dvrwindow = 600s, .param_dvrwindow = "30s"});
-service_config("7ANS", {.init_dvrwindow = 600s, .param_dvrwindow = "30s"});
+service_config("ARTE", {.init_dvrwindow = 600s, .incr_dvrwindow = 30s});
+service_config("7ANS", {.init_dvrwindow = 600s, .incr_dvrwindow = 30s});
+service_config("jumping", {.init_dvrwindow = 300s, .incr_dvrwindow = 30s});
 
 /* === UPSTREAM ORIGIN ===================== */
 config.upstreams["upstream_origin"] = {
@@ -84,6 +85,22 @@ config.upstreams["upstream_qos"] = {
     .endpoints = {"http://qos.example.com"},
 };
 
+config.upstreams["upstream_ridgeline"] = {
+    .max_redirect = 10,
+    .before_request = [](cache::upstream_request& request) { stitcher::log().debug("upstream_ridgeline before_request url={}", request.get_url()); },
+    .after_reply =
+        [](cache::upstream_request& request, cache::upstream_reply& reply) {
+            stitcher::log().debug("upstream_ridgeline after_reply url={} Cache-Control={} Expires={}",
+                                  request.get_url(),
+                                  reply.get_header(proxygen::HTTP_HEADER_CACHE_CONTROL), reply.get_header(proxygen::HTTP_HEADER_EXPIRES));
+            reply.remove_header(proxygen::HTTP_HEADER_CACHE_CONTROL);
+            reply.remove_header(proxygen::HTTP_HEADER_EXPIRES);
+        },
+    .default_expiration_function =
+        hpc::expire::by_extension({{".mpd", 1s, 100ms}, {".m3u8", 1s, 100ms}, {".mp4", 7200s, 100ms}, {".ts", 7200s, 100ms}, {".dash", 7200s, 100ms}}),
+    .endpoints = {"https://origin.ridgeline.fr"},
+};
+
 auto& upstream_stitcher_conf = config.upstreams["upstream_stitcher"];
 upstream_stitcher_conf.after_reply = [](const cache::upstream_request&, cache::upstream_reply& reply) {
     reply.remove_header(proxygen::HTTP_HEADER_CACHE_CONTROL);
@@ -102,7 +119,7 @@ vh_qos.endpoints = {endpoint(HTTP, 82)};
 
 /* === Register handlers on vhosts ========== */
 
-register_vhost(vh, "upstream_stitcher", "upstream_origin");
+register_vhost(vh, "upstream_stitcher", "upstream_ridgeline");
 register_vhost(vh_qos, "upstream_stitcher", "upstream_qos");
 
 /* === Initialize request_callback function to remove cache disabling headers === */
