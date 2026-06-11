@@ -381,7 +381,7 @@ init() {
 
     # Some bpk-nerdctl/rootless setups require a pseudo-TTY for exec.
     : > "$tmp_conf_path"
-    if $CONTAINER_CLI exec -it "$CONTAINER_NAME" bash -lc "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2>> "$tmp_err_path" && [ -s "$tmp_conf_path" ]; then
+    if $CONTAINER_CLI exec -t "$CONTAINER_NAME" bash -lc "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2>> "$tmp_err_path" && [ -s "$tmp_conf_path" ]; then
       fetch_ok=1
       break
     fi
