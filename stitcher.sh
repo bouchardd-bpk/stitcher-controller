@@ -350,8 +350,21 @@ init() {
   mkdir -p "$(dirname "$CONF_PATH")"
   local abs_conf_path
   abs_conf_path="$(pwd)/conf/$CONF_FILE"
-  if ! $CONTAINER_CLI cp "$CONTAINER_NAME:/etc/broadpeak/hpc/$CONF_FILE" "$abs_conf_path"; then
-    echo "❌ Failed to copy configuration from container."
+  local copy_ok=0
+  local copy_attempt=1
+  while [ "$copy_attempt" -le 10 ]; do
+    if $CONTAINER_CLI cp "$CONTAINER_NAME:/etc/broadpeak/hpc/$CONF_FILE" "$abs_conf_path"; then
+      copy_ok=1
+      break
+    fi
+
+    echo "⚠️  Copy attempt $copy_attempt/10 failed. Retrying in 5s..."
+    sleep 5
+    copy_attempt=$((copy_attempt + 1))
+  done
+
+  if [ "$copy_ok" -ne 1 ]; then
+    echo "❌ Failed to copy configuration from container after 10 attempts."
     $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
   fi
