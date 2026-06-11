@@ -379,6 +379,13 @@ init() {
       break
     fi
 
+    # Some bpk-nerdctl/rootless setups require a pseudo-TTY for exec.
+    : > "$tmp_conf_path"
+    if $CONTAINER_CLI exec -it "$CONTAINER_NAME" bash -lc "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2>> "$tmp_err_path" && [ -s "$tmp_conf_path" ]; then
+      fetch_ok=1
+      break
+    fi
+
     echo "⚠️  Fetch attempt $fetch_attempt/10 failed. Retrying in 5s..."
     sleep 5
     fetch_attempt=$((fetch_attempt + 1))
