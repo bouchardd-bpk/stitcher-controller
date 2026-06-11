@@ -155,6 +155,14 @@ ensure_conf_dir() {
   fi
 }
 
+ensure_conf_file_permissions() {
+  # Keep the generated config readable/editable by the invoking user.
+  if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+    chown "$SUDO_UID:$SUDO_GID" "$CONF_PATH" >/dev/null 2>&1 || true
+  fi
+  chmod 0644 "$CONF_PATH" >/dev/null 2>&1 || true
+}
+
 image_exists_local() {
   $CONTAINER_CLI image inspect "$IMAGE" >/dev/null 2>&1
 }
@@ -350,7 +358,9 @@ init() {
   mkdir -p "$(dirname "$CONF_PATH")"
   local abs_conf_path
   abs_conf_path="$(pwd)/conf/$CONF_FILE"
-  if ! $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" > "$abs_conf_path"; then
+  # Verify from inside the container that config exists and is not empty,
+  # then stream it to host to avoid CLI cp permission issues.
+  if ! $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "test -s /etc/broadpeak/hpc/$CONF_FILE && cat /etc/broadpeak/hpc/$CONF_FILE" > "$abs_conf_path"; then
     echo "❌ Failed to fetch configuration from container (exec/cat failed)."
     $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
@@ -360,6 +370,7 @@ init() {
     $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
   fi
+  ensure_conf_file_permissions
 
   echo ">> Stopping initial container..."
   $CONTAINER_CLI stop $CONTAINER_NAME
