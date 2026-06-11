@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +31,7 @@ STITCHER_SCRIPT = ROOT_DIR / "stitcher.sh"
 FRONTEND_DIR = ROOT_DIR / "frontend"
 
 # Container CLI detection (supports docker, podman, nerdctl, bpk-nerdctl)
-CONTAINER_CLI_CACHE: str | None = None
+CONTAINER_CLI_CACHE: Optional[str] = None
 
 
 def detect_container_cli() -> str:
@@ -273,8 +273,8 @@ class VhostModel(BaseModel):
     var: str = Field(min_length=1)
     pattern: str = Field(min_length=1)
     endpoints: list[VhostEndpointModel]
-    cert_selfsigned: str | None = None
-    cert_file: str | None = None
+    cert_selfsigned: Optional[str] = None
+    cert_file: Optional[str] = None
     upstream: str = Field(min_length=1)
 
     @field_validator("name", "var", "pattern", "upstream")
@@ -481,7 +481,7 @@ def is_manifest_path(path: str) -> bool:
     return path.lower().endswith(MANIFEST_EXTENSIONS)
 
 
-def parse_traffic_event(raw_line: str) -> dict[str, Any] | None:
+def parse_traffic_event(raw_line: str) -> Optional[dict[str, Any]]:
     line = raw_line.strip()
     if not line:
         return None

@@ -155,6 +155,25 @@ ensure_conf_dir() {
   fi
 }
 
+image_exists_local() {
+  $CONTAINER_CLI image inspect "$IMAGE" >/dev/null 2>&1
+}
+
+ensure_container_image() {
+  if image_exists_local; then
+    return 0
+  fi
+
+  echo "❌ Image not found in local $CONTAINER_CLI store: $IMAGE"
+  echo "   $CONTAINER_CLI and docker may use different local image stores."
+  echo "   Fix options:"
+  echo "   1) Login and pull with the selected CLI:"
+  echo "      sudo $CONTAINER_CLI login harbor.broadpeaklab.tv"
+  echo "      sudo $CONTAINER_CLI pull $IMAGE"
+  echo "   2) Or import an exported image tar into $CONTAINER_CLI."
+  return 1
+}
+
 generate_compose() {
   ensure_conf_dir
   local compose_conf_path="${CONF_PATH#./}"
@@ -305,19 +324,31 @@ init() {
 
   # Container mode initialization
   ensure_conf_dir
+  ensure_container_image || exit 1
+
+  # Clean up any leftover container from a previous failed init
+  if $CONTAINER_CLI ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER_NAME"; then
+    echo ">> Removing existing container '$CONTAINER_NAME'..."
+    $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  fi
 
   echo ">> Starting initial Stitcher container..."
-  $CONTAINER_CLI run --rm -d -t $DOCKER_COMMON $PORTS \
+  $CONTAINER_CLI run -d -t $DOCKER_COMMON \
     --name $CONTAINER_NAME $IMAGE
 
   echo ">> Waiting for startup..."
   sleep 5
 
   echo ">> Fetching configuration file..."
-  $CONTAINER_CLI cp "$CONTAINER_NAME:/etc/broadpeak/hpc/$CONF_FILE" "$CONF_PATH"
+  mkdir -p "$(dirname "$CONF_PATH")"
+  if ! $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" > "$CONF_PATH"; then
+    echo "❌ Failed to fetch configuration from container."
+    exit 1
+  fi
 
   echo ">> Stopping initial container..."
   $CONTAINER_CLI stop $CONTAINER_NAME
+  $CONTAINER_CLI rm -f $CONTAINER_NAME >/dev/null 2>&1 || true
 
   generate_compose
 
@@ -355,6 +386,8 @@ start() {
     echo "❌ Missing config. Run '$0 init' first."
     exit 1
   fi
+
+  ensure_container_image || exit 1
 
   echo ">> Starting Stitcher with persisted config..."
 
