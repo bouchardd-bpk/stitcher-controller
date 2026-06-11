@@ -2,3 +2,4 @@
 __pycache__/
 conf/backups/
 node_modules/
+conf/info_conf_stitcher.txt

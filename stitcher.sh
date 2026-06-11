@@ -360,10 +360,21 @@ init() {
   abs_conf_path="$(pwd)/conf/$CONF_FILE"
   local tmp_conf_path
   tmp_conf_path="$(mktemp "$(pwd)/conf/.${CONF_FILE}.tmp.XXXXXX")"
+  local tmp_err_path
+  tmp_err_path="$(mktemp "$(pwd)/conf/.${CONF_FILE}.err.XXXXXX")"
   local fetch_ok=0
   local fetch_attempt=1
   while [ "$fetch_attempt" -le 10 ]; do
-    if $CONTAINER_CLI exec "$CONTAINER_NAME" sh -c "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2>/dev/null && [ -s "$tmp_conf_path" ]; then
+    : > "$tmp_conf_path"
+    : > "$tmp_err_path"
+
+    if $CONTAINER_CLI exec -i "$CONTAINER_NAME" bash -lc "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2> "$tmp_err_path" && [ -s "$tmp_conf_path" ]; then
+      fetch_ok=1
+      break
+    fi
+
+    : > "$tmp_conf_path"
+    if $CONTAINER_CLI exec -i "$CONTAINER_NAME" sh -lc "cat /etc/broadpeak/hpc/$CONF_FILE" > "$tmp_conf_path" 2>> "$tmp_err_path" && [ -s "$tmp_conf_path" ]; then
       fetch_ok=1
       break
     fi
@@ -375,12 +386,18 @@ init() {
 
   if [ "$fetch_ok" -ne 1 ]; then
     rm -f "$tmp_conf_path" >/dev/null 2>&1 || true
+    if [ -s "$tmp_err_path" ]; then
+      echo "❌ Last fetch error:" >&2
+      tail -n 5 "$tmp_err_path" >&2 || true
+    fi
+    rm -f "$tmp_err_path" >/dev/null 2>&1 || true
     echo "❌ Failed to fetch configuration from container after 10 attempts."
     $CONTAINER_CLI rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     exit 1
   fi
 
   mv "$tmp_conf_path" "$abs_conf_path"
+  rm -f "$tmp_err_path" >/dev/null 2>&1 || true
   ensure_conf_file_permissions
 
   echo ">> Stopping initial container..."
